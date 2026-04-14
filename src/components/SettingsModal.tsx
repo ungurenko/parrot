@@ -1,17 +1,11 @@
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -37,6 +31,7 @@ interface Props {
 
 export function SettingsModal({ onClose }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [appVersion, setAppVersion] = useState("");
   const [modelReady, setModelReady] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -50,6 +45,7 @@ export function SettingsModal({ onClose }: Props) {
 
   useEffect(() => {
     invoke<Settings>("get_settings").then(setSettings);
+    getVersion().then(setAppVersion).catch(() => setAppVersion(""));
     refreshModelStatus();
   }, []);
 
@@ -118,78 +114,78 @@ export function SettingsModal({ onClose }: Props) {
         if (!openState) onClose();
       }}
     >
-      <DialogContent className="max-h-[85vh] gap-0 overflow-hidden p-0 sm:max-w-[600px]">
-        <DialogHeader className="border-b bg-background/80 p-5">
+      <DialogContent className="flex max-h-[85vh] min-h-0 w-[min(620px,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+        <DialogHeader className="min-w-0 shrink-0 border-b bg-background/80 p-5 pr-12">
           <DialogTitle>⚙️ Настройки</DialogTitle>
           <DialogDescription>
             Движок, папка сохранения и обновления приложения.
           </DialogDescription>
         </DialogHeader>
 
-        <FieldGroup className="max-h-[62vh] overflow-y-auto p-5">
-          <Field>
+        <FieldGroup className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-5">
+          <Field className="min-w-0">
             <FieldLabel>Движок транскрибации</FieldLabel>
             <EnginePicker value={settings.engine} onChange={changeEngine} />
           </Field>
 
-          <Card size="sm" className="border-0 bg-muted/35 shadow-none ring-0">
-            <CardHeader>
-              <CardTitle className="truncate">{engineLabel}</CardTitle>
-              <CardDescription>
+          <div className="flex min-w-0 flex-col gap-3 rounded-lg bg-muted/35 p-3">
+            <div className="min-w-0">
+              <div className="break-words text-sm font-medium leading-snug">
+                {engineLabel}
+              </div>
+              <div className="mt-1 text-sm leading-relaxed text-muted-foreground">
                 {modelReady
                   ? `Модель готова (${engineSize})`
                   : `Нужно подготовить перед первым запуском (${engineSize})`}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-3">
-                <Badge variant={modelReady ? "default" : "secondary"}>
-                  {modelReady ? "✅ Готова" : "Ожидает подготовки"}
-                </Badge>
-                {!modelReady && (
-                  <Button
-                    onClick={prepareModel}
-                    disabled={modelBusy}
-                    size="sm"
-                    className="shrink-0"
-                  >
-                    {modelBusy ? `${modelProgress}%` : prepareLabel}
-                  </Button>
-                )}
               </div>
-              {modelBusy && (
-                <div className="flex flex-col gap-2">
-                  <Progress
-                    value={Math.max(modelProgress, 2)}
-                    className={modelStage === "warmup" ? "animate-pulse" : ""}
-                  />
-                  <div className="text-xs text-muted-foreground">
-                    {modelProgress >= 100
-                      ? "✅ Готово"
-                      : modelStage === "warmup"
-                      ? `🔥 Прогреваю в памяти… ${modelProgress}% (разово, ~10–30 сек)`
-                      : `⬇️ Скачиваю модель… ${modelProgress}%`}
-                  </div>
+            </div>
+            <div className="flex min-w-0 items-center justify-between gap-3">
+              <Badge variant={modelReady ? "default" : "secondary"}>
+                {modelReady ? "✅ Готова" : "Ожидает подготовки"}
+              </Badge>
+              {!modelReady && (
+                <Button
+                  onClick={prepareModel}
+                  disabled={modelBusy}
+                  size="sm"
+                  className="shrink-0"
+                >
+                  {modelBusy ? `${modelProgress}%` : prepareLabel}
+                </Button>
+              )}
+            </div>
+            {modelBusy && (
+              <div className="flex min-w-0 flex-col gap-2">
+                <Progress
+                  value={Math.max(modelProgress, 2)}
+                  className={modelStage === "warmup" ? "animate-pulse" : ""}
+                />
+                <div className="break-words text-xs leading-relaxed text-muted-foreground">
+                  {modelProgress >= 100
+                    ? "✅ Готово"
+                    : modelStage === "warmup"
+                    ? `🔥 Прогреваю в памяти… ${modelProgress}% (разово, ~10–30 сек)`
+                    : `⬇️ Скачиваю модель… ${modelProgress}%`}
                 </div>
-              )}
-              {modelError && (
-                <Alert variant="destructive">
-                  <AlertDescription className="whitespace-pre-wrap">
-                    {modelError}
-                  </AlertDescription>
-                </Alert>
-              )}
-            </CardContent>
-          </Card>
+              </div>
+            )}
+            {modelError && (
+              <Alert variant="destructive">
+                <AlertDescription className="whitespace-pre-wrap break-words">
+                  {modelError}
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
 
-          <Field>
+          <Field className="min-w-0">
             <FieldLabel htmlFor="save-dir">Папка сохранения</FieldLabel>
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <Input
                 id="save-dir"
                 readOnly
                 value={settings.save_dir}
-                className="truncate bg-background"
+                className="min-w-0 truncate bg-background"
               />
               <Button
                 type="button"
@@ -205,8 +201,8 @@ export function SettingsModal({ onClose }: Props) {
 
         <Separator />
 
-        <div className="flex items-center justify-between gap-4 bg-muted/30 p-5">
-          <div className="flex flex-col items-start gap-1">
+        <div className="flex min-w-0 shrink-0 flex-col gap-3 bg-muted/30 p-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+          <div className="flex min-w-0 flex-col items-start gap-1">
             <Button
               type="button"
               variant="ghost"
@@ -218,9 +214,9 @@ export function SettingsModal({ onClose }: Props) {
             </Button>
             <UpdateChecker />
           </div>
-          <div className="text-right text-xs text-muted-foreground">
+          <div className="min-w-0 text-left text-xs text-muted-foreground sm:shrink-0 sm:text-right">
             <div>Разработано Александром Унгуренко, 2026</div>
-            <div>v0.1.0</div>
+            {appVersion && <div>v{appVersion}</div>}
           </div>
         </div>
       </DialogContent>

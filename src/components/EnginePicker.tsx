@@ -48,7 +48,7 @@ export function EnginePicker({ value, onChange }: Props) {
       }}
       orientation="vertical"
       spacing={2}
-      className="w-full flex-col items-stretch gap-2"
+      className="w-full min-w-0 flex-col items-stretch gap-2 overflow-x-hidden"
     >
       {OPTIONS.map((opt) => {
         const active = value === opt.id;
@@ -60,22 +60,26 @@ export function EnginePicker({ value, onChange }: Props) {
             size="lg"
             aria-label={opt.title}
             className={cn(
-              "h-auto w-full justify-start border-transparent bg-muted/25 px-3 py-3 text-left hover:bg-background",
+              "h-auto w-full min-w-0 items-start justify-start whitespace-normal border-transparent bg-muted/25 px-3 py-3 text-left hover:bg-background",
               active && "border-border bg-background",
             )}
           >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="truncate font-medium">{opt.title}</span>
-                {opt.badge && <Badge variant="secondary">{opt.badge}</Badge>}
+            <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <div className="min-w-0">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="font-medium leading-snug">{opt.title}</span>
+                  {opt.badge && <Badge variant="secondary">{opt.badge}</Badge>}
+                </div>
+                <div className="mt-1 whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
+                  {opt.hint}
+                </div>
+              </div>
+              <div className="flex justify-end">
                 {active && (
-                  <span className="ml-auto text-primary" aria-hidden="true">
+                  <span className="text-primary" aria-hidden="true">
                     ✓
                   </span>
                 )}
-              </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {opt.hint}
               </div>
             </div>
           </ToggleGroupItem>
