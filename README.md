@@ -4,6 +4,14 @@
 
 Разработано Александром Унгуренко в 2026 году.
 
+## Скачать для Mac
+
+[Скачать Parrot.dmg](https://github.com/ungurenko/parrot/releases/latest/download/Parrot.dmg)
+
+Откройте скачанный файл и перетащите Parrot в папку “Программы”.
+
+Подходит для Mac с Apple Silicon: M1, M2, M3, M4 и новее.
+
 ## Запуск
 
 - `npm run tauri dev` — запуск приложения для разработки.
