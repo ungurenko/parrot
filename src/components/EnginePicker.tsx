@@ -1,3 +1,6 @@
+import { Badge } from "@/components/ui/badge";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { cn } from "@/lib/utils";
 import type { Engine } from "../types";
 
 interface Props {
@@ -37,33 +40,47 @@ const OPTIONS: Array<{
 
 export function EnginePicker({ value, onChange }: Props) {
   return (
-    <div className="space-y-2">
+    <ToggleGroup
+      type="single"
+      value={value}
+      onValueChange={(next) => {
+        if (next) onChange(next as Engine);
+      }}
+      orientation="vertical"
+      spacing={2}
+      className="w-full flex-col items-stretch gap-2"
+    >
       {OPTIONS.map((opt) => {
         const active = value === opt.id;
         return (
-          <button
+          <ToggleGroupItem
             key={opt.id}
-            type="button"
-            onClick={() => onChange(opt.id)}
-            className={`w-full text-left px-3 py-3 rounded-md border transition-colors ${
-              active
-                ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10"
-                : "border-[var(--color-border)] bg-[var(--color-panel)] hover:bg-[var(--color-panel-hover)]"
-            }`}
+            value={opt.id}
+            variant="outline"
+            size="lg"
+            aria-label={opt.title}
+            className={cn(
+              "h-auto w-full justify-start border-transparent bg-muted/25 px-3 py-3 text-left hover:bg-background",
+              active && "border-border bg-background",
+            )}
           >
-            <div className="flex items-center gap-2">
-              <span className="font-medium">{opt.title}</span>
-              {opt.badge && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--color-accent)] text-white">
-                  {opt.badge}
-                </span>
-              )}
-              {active && <span className="ml-auto text-[var(--color-accent)]">✓</span>}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="truncate font-medium">{opt.title}</span>
+                {opt.badge && <Badge variant="secondary">{opt.badge}</Badge>}
+                {active && (
+                  <span className="ml-auto text-primary" aria-hidden="true">
+                    ✓
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {opt.hint}
+              </div>
             </div>
-            <div className="text-xs text-[var(--color-muted)] mt-1">{opt.hint}</div>
-          </button>
+          </ToggleGroupItem>
         );
       })}
-    </div>
+    </ToggleGroup>
   );
 }

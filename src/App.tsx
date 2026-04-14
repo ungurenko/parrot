@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { DropZone } from "./components/DropZone";
 import { YouTubeInput } from "./components/YouTubeInput";
 import { JobList } from "./components/JobList";
 import { ResultView } from "./components/ResultView";
 import { SettingsModal } from "./components/SettingsModal";
 import { Onboarding } from "./components/Onboarding";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Toaster } from "@/components/ui/sonner";
 import { useJobEvents } from "./hooks/useJobEvents";
 import { ENGINE_LABEL, type Job, type Settings } from "./types";
 
@@ -38,7 +42,9 @@ function App() {
         await invoke("enqueue_file", { path: p });
       } catch (e) {
         console.error("enqueue_file failed:", e);
-        alert(`Не удалось добавить файл:\n${e}`);
+        toast.error("Не удалось добавить файл", {
+          description: String(e),
+        });
       }
     }
   }, []);
@@ -47,7 +53,9 @@ function App() {
     try {
       await invoke("enqueue_youtube", { url });
     } catch (e) {
-      alert(`Не удалось добавить YouTube:\n${e}`);
+      toast.error("Не удалось добавить YouTube", {
+        description: String(e),
+      });
     }
   }, []);
 
@@ -58,61 +66,74 @@ function App() {
 
   if (needsOnboarding === null) return null;
   if (needsOnboarding) {
-    return <Onboarding onDone={() => setNeedsOnboarding(false)} />;
+    return (
+      <>
+        <Onboarding onDone={() => setNeedsOnboarding(false)} />
+        <Toaster richColors position="bottom-right" />
+      </>
+    );
   }
 
   return (
-    <main className="flex flex-col h-full">
-      <header className="flex items-center justify-between px-5 py-3 border-b border-[var(--color-border)]">
+    <main className="flex h-full flex-col bg-background text-foreground">
+      <header className="flex h-12 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-xl">
         <div className="flex items-center gap-2">
-          <span className="text-xl">🦜</span>
-          <h1 className="font-semibold">Parrot</h1>
+          <span className="text-xl" aria-hidden="true">
+            🦜
+          </span>
+          <h1 className="font-heading text-sm font-semibold">Parrot</h1>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {settings && (
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setSettingsOpen(true)}
-              className="text-xs text-[var(--color-muted)] hover:text-[var(--color-text)] px-2 py-1 rounded border border-[var(--color-border)] hover:bg-[var(--color-panel-hover)]"
               title="Нажмите, чтобы сменить движок"
+              className="h-7 max-w-64 text-muted-foreground"
             >
-              🤖 {ENGINE_LABEL[settings.engine]}
-            </button>
+              <span aria-hidden="true">🤖</span>
+              <span className="truncate">{ENGINE_LABEL[settings.engine]}</span>
+            </Button>
           )}
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={() => setSettingsOpen(true)}
-            className="text-lg hover:opacity-80"
             title="Настройки"
+            className="text-muted-foreground"
           >
-            ⚙️
-          </button>
+            <span aria-hidden="true">⚙️</span>
+            <span className="sr-only">Настройки</span>
+          </Button>
         </div>
       </header>
 
-      <div className="flex-1 grid grid-cols-[minmax(0,1fr)_minmax(320px,420px)] gap-4 p-5 min-h-0">
-        <section className="flex flex-col gap-4 min-h-0">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(320px,390px)] bg-background">
+        <section className="flex min-h-0 flex-col gap-3 p-4">
           <DropZone onFiles={handleFiles} />
           <YouTubeInput onSubmit={handleYouTube} />
-          <div className="flex-1 min-h-0 flex flex-col">
-            <div className="text-xs uppercase tracking-wide text-[var(--color-muted)] mb-2">
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="mb-2 text-xs font-medium text-muted-foreground">
               Результат
             </div>
-            <div className="flex-1 min-h-0">
+            <div className="min-h-0 flex-1">
               <ResultView job={selected} />
             </div>
           </div>
         </section>
 
-        <aside className="flex flex-col min-h-0">
-          <div className="text-xs uppercase tracking-wide text-[var(--color-muted)] mb-2">
+        <aside className="flex min-h-0 flex-col border-l bg-muted/35 p-4">
+          <div className="mb-2 text-xs font-medium text-muted-foreground">
             Очередь
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+          <ScrollArea className="-mr-2 min-h-0 flex-1 pr-2">
             <JobList
               jobs={jobs}
               onSelect={(j) => setSelectedId(j.id)}
               selectedId={selectedId}
             />
-          </div>
+          </ScrollArea>
         </aside>
       </div>
 
@@ -124,6 +145,7 @@ function App() {
           }}
         />
       )}
+      <Toaster richColors position="bottom-right" />
     </main>
   );
 }

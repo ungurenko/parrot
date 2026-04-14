@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { Card, CardContent } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 interface Props {
   onFiles: (paths: string[]) => void;
@@ -52,19 +54,32 @@ export function DropZone({ onFiles }: Props) {
   }, [onFiles]);
 
   return (
-    <div
-      className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed transition-all cursor-pointer h-44 ${
-        hovering
-          ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10"
-          : "border-[var(--color-border)] bg-[var(--color-panel)] hover:bg-[var(--color-panel-hover)]"
-      }`}
+    <Card
+      role="button"
+      tabIndex={0}
       onClick={pickFiles}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          pickFiles();
+        }
+      }}
+      className={cn(
+        "h-36 cursor-pointer border border-dashed bg-muted/25 shadow-none transition-colors",
+        hovering
+          ? "border-primary bg-background ring-2 ring-primary/10"
+          : "border-border hover:bg-background",
+      )}
     >
-      <div className="text-4xl mb-2">🎙️</div>
-      <div className="text-lg font-medium">Перетащите файл сюда</div>
-      <div className="text-sm text-[var(--color-muted)] mt-1">
-        или нажмите, чтобы выбрать — mp3, mp4, mov, m4a, flac, …
-      </div>
-    </div>
+      <CardContent className="flex h-full flex-col items-center justify-center px-4 text-center">
+        <div className="mb-2 text-3xl" aria-hidden="true">
+          🎙️
+        </div>
+        <div className="text-base font-medium">Перетащите файл сюда</div>
+        <div className="mt-1 text-sm text-muted-foreground">
+          или нажмите, чтобы выбрать — mp3, mp4, mov, m4a, flac, …
+        </div>
+      </CardContent>
+    </Card>
   );
 }

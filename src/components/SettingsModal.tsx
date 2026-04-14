@@ -2,6 +2,31 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
 import { ENGINE_LABEL, ENGINE_SIZE, isQwenEngine, type Engine, type Settings } from "../types";
 import { EnginePicker } from "./EnginePicker";
 import { UpdateChecker } from "./UpdateChecker";
@@ -87,64 +112,58 @@ export function SettingsModal({ onClose }: Props) {
     : "Скачать модель";
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(openState) => {
+        if (!openState) onClose();
+      }}
     >
-      <div
-        className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl p-6 w-[520px] max-h-[85vh] overflow-y-auto shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">⚙️ Настройки</h2>
-          <button
-            onClick={onClose}
-            className="text-[var(--color-muted)] hover:text-[var(--color-text)] text-xl"
-          >
-            ✕
-          </button>
-        </div>
+      <DialogContent className="max-h-[85vh] gap-0 overflow-hidden p-0 sm:max-w-[600px]">
+        <DialogHeader className="border-b bg-background/80 p-5">
+          <DialogTitle>⚙️ Настройки</DialogTitle>
+          <DialogDescription>
+            Движок, папка сохранения и обновления приложения.
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="space-y-5">
-          <div>
-            <label className="text-xs text-[var(--color-muted)] uppercase tracking-wide">
-              Движок транскрибации
-            </label>
-            <div className="mt-2">
-              <EnginePicker value={settings.engine} onChange={changeEngine} />
-            </div>
+        <FieldGroup className="max-h-[62vh] overflow-y-auto p-5">
+          <Field>
+            <FieldLabel>Движок транскрибации</FieldLabel>
+            <EnginePicker value={settings.engine} onChange={changeEngine} />
+          </Field>
 
-            <div className="mt-3 p-3 rounded-md bg-[var(--color-panel)] border border-[var(--color-border)]">
+          <Card size="sm" className="border-0 bg-muted/35 shadow-none ring-0">
+            <CardHeader>
+              <CardTitle className="truncate">{engineLabel}</CardTitle>
+              <CardDescription>
+                {modelReady
+                  ? `Модель готова (${engineSize})`
+                  : `Нужно подготовить перед первым запуском (${engineSize})`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
               <div className="flex items-center justify-between gap-3">
-                <div className="text-sm min-w-0">
-                  <div className="font-medium truncate">{engineLabel}</div>
-                  <div className="text-xs text-[var(--color-muted)] mt-0.5">
-                    {modelReady
-                      ? `✅ Модель готова (${engineSize})`
-                      : `Нужно подготовить перед первым запуском (${engineSize})`}
-                  </div>
-                </div>
+                <Badge variant={modelReady ? "default" : "secondary"}>
+                  {modelReady ? "✅ Готова" : "Ожидает подготовки"}
+                </Badge>
                 {!modelReady && (
-                  <button
+                  <Button
                     onClick={prepareModel}
                     disabled={modelBusy}
-                    className="shrink-0 text-xs px-3 py-2 rounded-md bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)] disabled:opacity-60"
+                    size="sm"
+                    className="shrink-0"
                   >
                     {modelBusy ? `${modelProgress}%` : prepareLabel}
-                  </button>
+                  </Button>
                 )}
               </div>
               {modelBusy && (
-                <div className="mt-3">
-                  <div className="h-1.5 bg-[var(--color-border)] rounded overflow-hidden">
-                    <div
-                      className={`h-full bg-[var(--color-accent)] transition-all ${
-                        modelStage === "warmup" ? "animate-pulse" : ""
-                      }`}
-                      style={{ width: `${Math.max(modelProgress, 2)}%` }}
-                    />
-                  </div>
-                  <div className="text-xs text-[var(--color-muted)] mt-1">
+                <div className="flex flex-col gap-2">
+                  <Progress
+                    value={Math.max(modelProgress, 2)}
+                    className={modelStage === "warmup" ? "animate-pulse" : ""}
+                  />
+                  <div className="text-xs text-muted-foreground">
                     {modelProgress >= 100
                       ? "✅ Готово"
                       : modelStage === "warmup"
@@ -154,47 +173,57 @@ export function SettingsModal({ onClose }: Props) {
                 </div>
               )}
               {modelError && (
-                <div className="mt-2 text-xs text-red-400 p-3 bg-red-500/10 rounded-md border border-red-500/20">
-                  {modelError}
-                </div>
+                <Alert variant="destructive">
+                  <AlertDescription className="whitespace-pre-wrap">
+                    {modelError}
+                  </AlertDescription>
+                </Alert>
               )}
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
-          <div>
-            <label className="text-xs text-[var(--color-muted)] uppercase tracking-wide">
-              Папка сохранения
-            </label>
-            <div className="mt-1 flex items-center gap-2">
-              <div className="flex-1 text-sm truncate px-3 py-2 rounded-md bg-[var(--color-panel)] border border-[var(--color-border)]">
-                {settings.save_dir}
-              </div>
-              <button
+          <Field>
+            <FieldLabel htmlFor="save-dir">Папка сохранения</FieldLabel>
+            <div className="flex items-center gap-2">
+              <Input
+                id="save-dir"
+                readOnly
+                value={settings.save_dir}
+                className="truncate bg-background"
+              />
+              <Button
+                type="button"
+                variant="outline"
                 onClick={pickFolder}
-                className="text-xs px-3 py-2 rounded-md bg-[var(--color-panel)] border border-[var(--color-border)] hover:bg-[var(--color-panel-hover)]"
+                className="shrink-0"
               >
                 Выбрать…
-              </button>
+              </Button>
             </div>
-          </div>
+          </Field>
+        </FieldGroup>
 
-          <div className="flex items-center justify-between gap-4 pt-2 border-t border-[var(--color-border)]">
-            <div className="flex flex-col gap-1">
-              <button
-                onClick={openLogs}
-                className="text-left text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
-              >
-                📜 Открыть логи
-              </button>
-              <UpdateChecker />
-            </div>
-            <div className="text-right text-xs text-[var(--color-muted)]">
-              <div>Разработано Александром Унгуренко, 2026</div>
-              <div>v0.1.0</div>
-            </div>
+        <Separator />
+
+        <div className="flex items-center justify-between gap-4 bg-muted/30 p-5">
+          <div className="flex flex-col items-start gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={openLogs}
+              className="px-0 text-muted-foreground"
+            >
+              📜 Открыть логи
+            </Button>
+            <UpdateChecker />
+          </div>
+          <div className="text-right text-xs text-muted-foreground">
+            <div>Разработано Александром Унгуренко, 2026</div>
+            <div>v0.1.0</div>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

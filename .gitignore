@@ -13,6 +13,7 @@ dist-ssr
 *.local
 .qwen-mlx/
 qwen-results/
+.superpowers/
 
 # Editor directories and files
 .vscode/*

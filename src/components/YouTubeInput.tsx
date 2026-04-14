@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Field, FieldGroup } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 
 interface Props {
   onSubmit: (url: string) => void;
@@ -16,22 +19,24 @@ export function YouTubeInput({ onSubmit }: Props) {
   };
 
   return (
-    <form onSubmit={submit} className="flex gap-2 items-center">
-      <span className="text-lg">📺</span>
-      <input
-        type="url"
-        placeholder="YouTube URL…"
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        className="flex-1 px-3 py-2 rounded-md bg-[var(--color-panel)] border border-[var(--color-border)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent)]"
-      />
-      <button
-        type="submit"
-        className="px-4 py-2 rounded-md bg-[var(--color-accent)] text-white font-medium hover:bg-[var(--color-accent-hover)] transition-colors disabled:opacity-50"
-        disabled={!url.trim()}
-      >
+    <form onSubmit={submit} className="flex items-center gap-2">
+      <span className="text-lg" aria-hidden="true">
+        📺
+      </span>
+      <FieldGroup className="flex-1 gap-0">
+        <Field>
+          <Input
+            type="url"
+            placeholder="YouTube URL…"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            className="h-8 bg-background"
+          />
+        </Field>
+      </FieldGroup>
+      <Button type="submit" size="sm" disabled={!url.trim()}>
         Старт
-      </button>
+      </Button>
     </form>
   );
 }

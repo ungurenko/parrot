@@ -1,4 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Textarea } from "@/components/ui/textarea";
 import type { Job } from "../types";
 
 interface Props {
@@ -8,54 +19,79 @@ interface Props {
 export function ResultView({ job }: Props) {
   if (!job) {
     return (
-      <div className="text-sm text-[var(--color-muted)] italic">
-        Результат появится здесь после завершения задачи
-      </div>
+      <Empty className="h-full border bg-muted/20">
+        <EmptyHeader>
+          <EmptyMedia className="text-2xl">📄</EmptyMedia>
+          <EmptyTitle>Результат появится здесь</EmptyTitle>
+          <EmptyDescription>
+            Выберите готовую задачу, чтобы увидеть текст.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
 
   if (job.status === "error") {
     return (
-      <div className="text-sm text-red-400">
-        <div className="font-medium mb-1">Ошибка</div>
-        <div className="whitespace-pre-wrap">{job.error}</div>
-      </div>
+      <Alert variant="destructive">
+        <AlertTitle>Ошибка</AlertTitle>
+        <AlertDescription className="whitespace-pre-wrap">
+          {job.error}
+        </AlertDescription>
+      </Alert>
     );
   }
 
   if (job.status !== "done" || !job.text) {
     return (
-      <div className="text-sm text-[var(--color-muted)] italic">
-        Задача ещё не завершена…
-      </div>
+      <Empty className="h-full border bg-muted/20">
+        <EmptyHeader>
+          <EmptyMedia className="text-2xl">⏳</EmptyMedia>
+          <EmptyTitle>Задача ещё не завершена</EmptyTitle>
+          <EmptyDescription>
+            Текст появится здесь, когда расшифровка будет готова.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
 
+  const copyText = async () => {
+    try {
+      await navigator.clipboard.writeText(job.text ?? "");
+      toast.success("Текст скопирован");
+    } catch (e) {
+      toast.error("Не удалось скопировать текст", {
+        description: String(e),
+      });
+    }
+  };
+
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between mb-2 shrink-0">
-        <div className="text-xs text-[var(--color-muted)] truncate">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="mb-2 flex shrink-0 items-center justify-between gap-3">
+        <div className="min-w-0 truncate text-xs text-muted-foreground">
           {job.outputPath}
         </div>
-        <div className="flex gap-2 shrink-0">
-          <button
-            className="text-xs px-3 py-1.5 rounded-md bg-[var(--color-panel)] border border-[var(--color-border)] hover:bg-[var(--color-panel-hover)]"
-            onClick={() => navigator.clipboard.writeText(job.text ?? "")}
-          >
-            📋 Копировать
-          </button>
-          <button
-            className="text-xs px-3 py-1.5 rounded-md bg-[var(--color-panel)] border border-[var(--color-border)] hover:bg-[var(--color-panel-hover)]"
+        <div className="flex shrink-0 gap-2">
+          <Button variant="outline" size="sm" onClick={copyText}>
+            <span aria-hidden="true">📋</span>
+            Копировать
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => invoke("open_in_finder", { path: job.outputPath })}
           >
-            📂 В Finder
-          </button>
+            <span aria-hidden="true">📂</span>
+            В Finder
+          </Button>
         </div>
       </div>
-      <textarea
+      <Textarea
         readOnly
         value={job.text}
-        className="flex-1 min-h-0 p-3 rounded-md bg-[var(--color-panel)] border border-[var(--color-border)] text-sm font-mono resize-none"
+        className="min-h-0 flex-1 resize-none bg-background font-mono text-sm shadow-inner"
       />
     </div>
   );

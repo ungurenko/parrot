@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Button } from "@/components/ui/button";
 
 const RELEASES_URL = "https://github.com/ungurenko/parrot/releases/latest";
 
@@ -108,21 +109,27 @@ export function UpdateChecker() {
   const disabled = status === "checking" || status === "installing";
 
   return (
-    <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
-      <button
+    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <Button
+        type="button"
+        variant="link"
+        size="sm"
         onClick={buttonAction}
         disabled={disabled}
-        className="hover:text-[var(--color-text)] disabled:opacity-60"
+        className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
       >
         {label}
-      </button>
-      <span>·</span>
-      <button
+      </Button>
+      <span aria-hidden="true">·</span>
+      <Button
+        type="button"
+        variant="link"
+        size="sm"
         onClick={() => openUrl(RELEASES_URL)}
-        className="hover:text-[var(--color-text)]"
+        className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
       >
         Релизы
-      </button>
+      </Button>
     </div>
   );
 }
