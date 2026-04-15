@@ -15,6 +15,10 @@ pub fn preload(model_path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn clear_cache() {
+    *CONTEXT.lock() = None;
+}
+
 fn get_or_load_context(model_path: &Path) -> Result<Arc<WhisperContext>> {
     let mut guard = CONTEXT.lock();
     if guard.is_none() {
@@ -33,6 +37,7 @@ fn get_or_load_context(model_path: &Path) -> Result<Arc<WhisperContext>> {
 pub fn transcribe_wav(
     model_path: &Path,
     wav_path: &Path,
+    language: &str,
     progress_cb: impl Fn(u32) + Send + Sync + 'static,
 ) -> Result<String> {
     let samples = read_wav_samples(wav_path)?;
@@ -41,7 +46,7 @@ pub fn transcribe_wav(
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(preferred_threads() as i32);
-    params.set_language(Some("auto"));
+    params.set_language(whisper_language(language));
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
@@ -58,6 +63,13 @@ pub fn transcribe_wav(
         out.push('\n');
     }
     Ok(out.trim().to_string())
+}
+
+fn whisper_language(language: &str) -> Option<&str> {
+    match language {
+        "auto" | "" => Some("auto"),
+        code => Some(code),
+    }
 }
 
 fn read_wav_samples(path: &Path) -> Result<Vec<f32>> {

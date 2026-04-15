@@ -20,7 +20,17 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { ENGINE_LABEL, ENGINE_SIZE, type Engine, type Settings } from "../types";
+import {
+  isSlowModelDownload,
+  modelDownloadDetails,
+} from "@/lib/modelProgress";
+import {
+  ENGINE_LABEL,
+  ENGINE_SIZE,
+  type Engine,
+  type ModelProgressDetail,
+  type Settings,
+} from "../types";
 import { EnginePicker } from "./EnginePicker";
 
 interface Props {
@@ -34,6 +44,8 @@ export function Onboarding({ onDone }: Props) {
   const [step, setStep] = useState<Step>("folder");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [progress, setProgress] = useState(0);
+  const [progressDetail, setProgressDetail] =
+    useState<ModelProgressDetail | null>(null);
   const [modelStage, setModelStage] = useState<ModelStage>("downloading");
   const [error, setError] = useState<string | null>(null);
 
@@ -45,11 +57,16 @@ export function Onboarding({ onDone }: Props) {
     const progressP = listen<number>("model:progress", (e) =>
       setProgress(e.payload),
     );
+    const progressDetailP = listen<ModelProgressDetail>(
+      "model:progress_detail",
+      (e) => setProgressDetail(e.payload),
+    );
     const stageP = listen<ModelStage>("model:stage", (e) =>
       setModelStage(e.payload),
     );
     return () => {
       progressP.then((u) => u());
+      progressDetailP.then((u) => u());
       stageP.then((u) => u());
     };
   }, []);
@@ -73,6 +90,7 @@ export function Onboarding({ onDone }: Props) {
     setStep("downloading");
     setModelStage("downloading");
     setProgress(0);
+    setProgressDetail(null);
     setError(null);
     try {
       await invoke("download_model");
@@ -85,7 +103,9 @@ export function Onboarding({ onDone }: Props) {
 
   const finish = async () => {
     if (settings) {
-      await invoke("set_settings", { new: { ...settings, onboarded: true } });
+      await invoke("set_settings", {
+        new: { ...settings, language: settings.language ?? "auto", onboarded: true },
+      });
     }
     onDone();
   };
@@ -178,6 +198,16 @@ export function Onboarding({ onDone }: Props) {
                   ? "Загружаю модель в память. Это разово, обычно занимает 10–30 секунд."
                   : "Загружаю файлы модели."}
               </div>
+              {modelStage === "downloading" && modelDownloadDetails(progressDetail) && (
+                <div className="text-xs text-muted-foreground">
+                  {modelDownloadDetails(progressDetail)}
+                </div>
+              )}
+              {modelStage === "downloading" && isSlowModelDownload(progressDetail) && (
+                <div className="text-xs text-muted-foreground">
+                  Сервер отдает файл медленно, загрузка продолжается.
+                </div>
+              )}
             </div>
           )}
 

@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,9 +18,16 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
-import { ENGINE_LABEL, ENGINE_SIZE, isQwenEngine, type Engine, type Settings } from "../types";
+import {
+  ENGINE_LABEL,
+  LANGUAGE_LABEL,
+  type Engine,
+  type ModelProgressDetail,
+  type ModelStatuses,
+  type Settings,
+  type TranscriptLanguage,
+} from "../types";
 import { EnginePicker } from "./EnginePicker";
 import { UpdateChecker } from "./UpdateChecker";
 
@@ -32,33 +38,41 @@ interface Props {
 export function SettingsModal({ onClose }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [appVersion, setAppVersion] = useState("");
-  const [modelReady, setModelReady] = useState(false);
-  const [modelBusy, setModelBusy] = useState(false);
+  const [modelStatuses, setModelStatuses] = useState<ModelStatuses>({});
+  const [busyEngine, setBusyEngine] = useState<Engine | null>(null);
+  const [deletingEngine, setDeletingEngine] = useState<Engine | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const [modelProgress, setModelProgress] = useState(0);
+  const [modelProgressDetail, setModelProgressDetail] =
+    useState<ModelProgressDetail | null>(null);
   const [modelStage, setModelStage] = useState<"downloading" | "warmup" | "ready">(
     "downloading",
   );
 
-  const refreshModelStatus = () =>
-    invoke<boolean>("is_model_ready").then(setModelReady);
+  const refreshModelStatuses = () =>
+    invoke<ModelStatuses>("get_model_statuses").then(setModelStatuses);
 
   useEffect(() => {
     invoke<Settings>("get_settings").then(setSettings);
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
-    refreshModelStatus();
+    refreshModelStatuses();
   }, []);
 
   useEffect(() => {
     const progressP = listen<number>("model:progress", (e) => {
       setModelProgress(e.payload);
     });
+    const progressDetailP = listen<ModelProgressDetail>(
+      "model:progress_detail",
+      (e) => setModelProgressDetail(e.payload),
+    );
     const stageP = listen<"downloading" | "warmup" | "ready">(
       "model:stage",
       (e) => setModelStage(e.payload),
     );
     return () => {
       progressP.then((u) => u());
+      progressDetailP.then((u) => u());
       stageP.then((u) => u());
     };
   }, []);
@@ -76,36 +90,58 @@ export function SettingsModal({ onClose }: Props) {
     const next = { ...settings, engine };
     setSettings(next);
     setModelError(null);
-    setModelProgress(0);
     await invoke("set_settings", { new: next });
-    await refreshModelStatus();
   };
 
-  const prepareModel = async () => {
-    setModelBusy(true);
+  const changeLanguage = async (language: TranscriptLanguage) => {
+    if (!settings) return;
+    const next = { ...settings, language };
+    setSettings(next);
+    await invoke("set_settings", { new: next });
+  };
+
+  const prepareModel = async (engine: Engine) => {
+    setBusyEngine(engine);
     setModelError(null);
     setModelProgress(1);
+    setModelProgressDetail(null);
     setModelStage("downloading");
     try {
-      await invoke("download_model");
+      await invoke("download_model_for_engine", { engine });
       setModelProgress(100);
-      await refreshModelStatus();
+      await refreshModelStatuses();
     } catch (e: any) {
       setModelError(String(e));
     } finally {
-      setModelBusy(false);
+      setBusyEngine(null);
+    }
+  };
+
+  const deleteModel = async (engine: Engine) => {
+    if (!modelStatuses[engine]) return;
+    const ok = window.confirm(
+      `Вы уверены, что хотите удалить модель «${ENGINE_LABEL[engine]}»?\n\nТексты и настройки останутся на месте. Если модель понадобится снова, ее можно будет скачать заново.`,
+    );
+    if (!ok) return;
+
+    setDeletingEngine(engine);
+    setModelError(null);
+    try {
+      await invoke("delete_model_for_engine", { engine });
+      setModelStatuses((current) => ({ ...current, [engine]: false }));
+      setModelProgress(0);
+      setModelProgressDetail(null);
+    } catch (e: any) {
+      setModelError(String(e));
+      await refreshModelStatuses();
+    } finally {
+      setDeletingEngine(null);
     }
   };
 
   const openLogs = () => invoke("open_logs");
 
   if (!settings) return null;
-
-  const engineLabel = ENGINE_LABEL[settings.engine];
-  const engineSize = ENGINE_SIZE[settings.engine];
-  const prepareLabel = isQwenEngine(settings.engine)
-    ? "Подготовить модель"
-    : "Скачать модель";
 
   return (
     <Dialog
@@ -124,59 +160,44 @@ export function SettingsModal({ onClose }: Props) {
 
         <FieldGroup className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-5">
           <Field className="min-w-0">
-            <FieldLabel>Движок транскрибации</FieldLabel>
-            <EnginePicker value={settings.engine} onChange={changeEngine} />
+            <FieldLabel>Модели распознавания</FieldLabel>
+            <EnginePicker
+              value={settings.engine}
+              statuses={modelStatuses}
+              busyEngine={busyEngine}
+              deletingEngine={deletingEngine}
+              progress={modelProgress}
+              progressDetail={modelProgressDetail}
+              stage={modelStage}
+              onChange={changeEngine}
+              onPrepare={prepareModel}
+              onDelete={deleteModel}
+            />
           </Field>
 
-          <div className="flex min-w-0 flex-col gap-3 rounded-lg bg-muted/35 p-3">
-            <div className="min-w-0">
-              <div className="break-words text-sm font-medium leading-snug">
-                {engineLabel}
-              </div>
-              <div className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                {modelReady
-                  ? `Модель готова (${engineSize})`
-                  : `Нужно подготовить перед первым запуском (${engineSize})`}
-              </div>
-            </div>
-            <div className="flex min-w-0 items-center justify-between gap-3">
-              <Badge variant={modelReady ? "default" : "secondary"}>
-                {modelReady ? "✅ Готова" : "Ожидает подготовки"}
-              </Badge>
-              {!modelReady && (
-                <Button
-                  onClick={prepareModel}
-                  disabled={modelBusy}
-                  size="sm"
-                  className="shrink-0"
-                >
-                  {modelBusy ? `${modelProgress}%` : prepareLabel}
-                </Button>
-              )}
-            </div>
-            {modelBusy && (
-              <div className="flex min-w-0 flex-col gap-2">
-                <Progress
-                  value={Math.max(modelProgress, 2)}
-                  className={modelStage === "warmup" ? "animate-pulse" : ""}
-                />
-                <div className="break-words text-xs leading-relaxed text-muted-foreground">
-                  {modelProgress >= 100
-                    ? "✅ Готово"
-                    : modelStage === "warmup"
-                    ? `🔥 Прогреваю в памяти… ${modelProgress}% (разово, ~10–30 сек)`
-                    : `⬇️ Скачиваю модель… ${modelProgress}%`}
-                </div>
-              </div>
-            )}
-            {modelError && (
-              <Alert variant="destructive">
-                <AlertDescription className="whitespace-pre-wrap break-words">
-                  {modelError}
-                </AlertDescription>
-              </Alert>
-            )}
-          </div>
+          <Field className="min-w-0">
+            <FieldLabel htmlFor="language">Язык аудио</FieldLabel>
+            <select
+              id="language"
+              value={settings.language}
+              onChange={(e) => changeLanguage(e.target.value as TranscriptLanguage)}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              {Object.entries(LANGUAGE_LABEL).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {modelError && (
+            <Alert variant="destructive">
+              <AlertDescription className="whitespace-pre-wrap break-words">
+                {modelError}
+              </AlertDescription>
+            </Alert>
+          )}
 
           <Field className="min-w-0">
             <FieldLabel htmlFor="save-dir">Папка сохранения</FieldLabel>

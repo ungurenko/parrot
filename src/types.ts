@@ -31,8 +31,41 @@ export const ENGINE_SIZE: Record<Engine, string> = {
 
 export const isQwenEngine = (engine: Engine) => engine.startsWith("qwen-");
 
+export type ModelStatuses = Partial<Record<Engine, boolean>>;
+
+export interface ModelProgressDetail {
+  percent: number;
+  downloaded_bytes: number;
+  total_bytes: number;
+  speed_bytes_per_sec: number;
+}
+
+export type TranscriptLanguage =
+  | "auto"
+  | "ru"
+  | "en"
+  | "de"
+  | "fr"
+  | "es"
+  | "it"
+  | "pt"
+  | "uk";
+
+export const LANGUAGE_LABEL: Record<TranscriptLanguage, string> = {
+  auto: "Авто",
+  ru: "Русский",
+  en: "Английский",
+  de: "Немецкий",
+  fr: "Французский",
+  es: "Испанский",
+  it: "Итальянский",
+  pt: "Португальский",
+  uk: "Украинский",
+};
+
 export interface Settings {
   save_dir: string;
   onboarded: boolean;
   engine: Engine;
+  language: TranscriptLanguage;
 }

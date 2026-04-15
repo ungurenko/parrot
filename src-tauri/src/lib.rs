@@ -10,7 +10,8 @@ mod transcriber_parakeet;
 mod transcriber_qwen;
 mod writer;
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -27,6 +28,13 @@ pub struct AppState {
 struct EnqueueResult {
     id: String,
 }
+
+const SUPPORTED_ENGINES: [&str; 4] = [
+    "parakeet",
+    "qwen-0.6b",
+    "qwen-1.7b",
+    "whisper",
+];
 
 #[tauri::command]
 async fn enqueue_file(
@@ -98,17 +106,29 @@ fn set_settings(app: AppHandle, new: Settings) -> Result<(), String> {
 #[tauri::command]
 fn is_model_ready(app: AppHandle) -> bool {
     let s = settings::load(&app);
-    match s.engine.as_str() {
-        "parakeet" => paths::parakeet_files_ready(&app),
+    is_model_ready_for_engine(&app, &s.engine)
+}
+
+#[tauri::command]
+fn get_model_statuses(app: AppHandle) -> HashMap<String, bool> {
+    SUPPORTED_ENGINES
+        .into_iter()
+        .map(|engine| (engine.to_string(), is_model_ready_for_engine(&app, engine)))
+        .collect()
+}
+
+fn is_model_ready_for_engine(app: &AppHandle, engine: &str) -> bool {
+    match engine {
+        "parakeet" => paths::parakeet_files_ready(app),
         "whisper" => {
-            let main = paths::model_path(&app).map(|p| p.exists()).unwrap_or(false);
-            let coreml = paths::coreml_encoder_path(&app)
+            let main = paths::model_path(app).map(|p| p.exists()).unwrap_or(false);
+            let coreml = paths::coreml_encoder_path(app)
                 .map(|p| p.exists())
                 .unwrap_or(false);
             main && coreml
         }
         engine if transcriber_qwen::is_qwen_engine(engine) => {
-            transcriber_qwen::is_ready(&app, engine)
+            transcriber_qwen::is_ready(app, engine)
         }
         _ => false,
     }
@@ -116,8 +136,17 @@ fn is_model_ready(app: AppHandle) -> bool {
 
 #[tauri::command]
 async fn download_model(app: AppHandle) -> Result<(), String> {
-    let s = settings::load(&app);
-    match s.engine.as_str() {
+    let engine = settings::load(&app).engine;
+    download_model_for_engine(app, engine).await
+}
+
+#[tauri::command]
+async fn download_model_for_engine(app: AppHandle, engine: String) -> Result<(), String> {
+    download_model_inner(app, &engine).await
+}
+
+async fn download_model_inner(app: AppHandle, engine: &str) -> Result<(), String> {
+    match engine {
         "parakeet" => {
             let dir = paths::parakeet_dir(&app).map_err(|e| e.to_string())?;
             model::download_parakeet(app.clone(), &dir)
@@ -188,6 +217,60 @@ async fn download_model(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn delete_model(app: AppHandle) -> Result<(), String> {
+    let engine = settings::load(&app).engine;
+    delete_model_for_engine(app, engine).await
+}
+
+#[tauri::command]
+async fn delete_model_for_engine(app: AppHandle, engine: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete_model_files(&app, &engine))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn delete_model_files(app: &AppHandle, engine: &str) -> Result<(), String> {
+    match engine {
+        "parakeet" => {
+            transcriber_parakeet::clear_cache();
+            let dir = paths::parakeet_dir(app).map_err(|e| e.to_string())?;
+            remove_path_if_exists(&dir).map_err(|e| e.to_string())?;
+        }
+        "whisper" => {
+            transcriber::clear_cache();
+            let main = paths::model_path(app).map_err(|e| e.to_string())?;
+            let coreml = paths::coreml_encoder_path(app).map_err(|e| e.to_string())?;
+            remove_path_if_exists(&main).map_err(|e| e.to_string())?;
+            remove_path_if_exists(&coreml).map_err(|e| e.to_string())?;
+
+            if let Ok(models_dir) = paths::app_data_dir(app).map(|p| p.join("models")) {
+                let _ = remove_path_if_exists(&models_dir.join("__MACOSX"));
+            }
+        }
+        engine if transcriber_qwen::is_qwen_engine(engine) => {
+            transcriber_qwen::stop_server();
+            let model = transcriber_qwen::model_for_engine(engine)
+                .ok_or_else(|| format!("Неизвестная Qwen-модель: {engine}"))?;
+            let cache_dir = paths::qwen_cache_dir(app).map_err(|e| e.to_string())?;
+            let repo_cache_name = format!("models--{}", model.replace('/', "--"));
+            remove_path_if_exists(&cache_dir.join("hub").join(repo_cache_name))
+                .map_err(|e| e.to_string())?;
+        }
+        other => return Err(format!("Неизвестный движок транскрибации: {other}")),
+    }
+    Ok(())
+}
+
+fn remove_path_if_exists(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)?;
+    } else if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn cancel_job(id: String, state: State<'_, AppState>) -> bool {
     state.queue.cancel_registry().cancel(&id)
 }
@@ -240,6 +323,7 @@ fn preload_active_engine(handle: AppHandle) {
         let s = settings::load(&handle);
         match s.engine.as_str() {
             "parakeet" => {
+                transcriber_qwen::stop_server();
                 if paths::parakeet_files_ready(&handle) {
                     if let Ok(dir) = paths::parakeet_dir(&handle) {
                         tracing::info!("Preloading Parakeet TDT v3…");
@@ -251,6 +335,7 @@ fn preload_active_engine(handle: AppHandle) {
                 }
             }
             "whisper" => {
+                transcriber_qwen::stop_server();
                 let main_ok = paths::model_path(&handle)
                     .map(|p| p.exists())
                     .unwrap_or(false);
@@ -268,7 +353,15 @@ fn preload_active_engine(handle: AppHandle) {
                 }
             }
             engine if transcriber_qwen::is_qwen_engine(engine) => {
-                tracing::info!("Qwen MLX selected; external CLI will run per job");
+                if transcriber_qwen::is_ready(&handle, engine) {
+                    tracing::info!("Preloading Qwen MLX warm server…");
+                    match transcriber_qwen::preload_server(&handle, engine) {
+                        Ok(_) => tracing::info!("Qwen MLX warm server ready"),
+                        Err(e) => tracing::error!("Qwen MLX warm server failed: {e:#}"),
+                    }
+                } else {
+                    tracing::info!("Qwen MLX selected; model is not ready yet");
+                }
             }
             other => {
                 tracing::warn!("Unknown transcription engine selected: {other}");
@@ -301,6 +394,7 @@ pub fn run() {
                 win.on_window_event(|event| {
                     if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                         binaries::stop_yt_dlp_startup_cache();
+                        transcriber_qwen::stop_server();
                     }
                 });
             }
@@ -339,7 +433,11 @@ pub fn run() {
             get_settings,
             set_settings,
             is_model_ready,
+            get_model_statuses,
             download_model,
+            download_model_for_engine,
+            delete_model,
+            delete_model_for_engine,
             cancel_job,
             read_text_file,
             open_in_finder,

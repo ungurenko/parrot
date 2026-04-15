@@ -369,12 +369,14 @@ async fn transcribe_prepared(
     } = prepared;
     let cfg = settings::load(app);
     let engine = cfg.engine.clone();
+    let language = cfg.language.clone();
     ensure_model_ready(app, &engine)?;
 
     emit_progress(app, &job.id, "transcribing", 1);
     let app_for_cb = app.clone();
     let job_id = job.id.clone();
     let engine_for_task = engine.clone();
+    let language_for_task = language.clone();
     let app_for_task = app.clone();
     let wav_for_task = wav_path.clone();
     let transcribing_started = Instant::now();
@@ -434,13 +436,14 @@ async fn transcribe_prepared(
             }
             "whisper" => {
                 let model = paths::model_path(&app_for_task)?;
-                transcriber::transcribe_wav(&model, &wav_for_task, progress)
+                transcriber::transcribe_wav(&model, &wav_for_task, &language_for_task, progress)
             }
             engine if transcriber_qwen::is_qwen_engine(engine) => {
                 transcriber_qwen::transcribe_wav(
                     &app_for_task,
                     &wav_for_task,
                     engine,
+                    &language_for_task,
                     token.clone(),
                     progress,
                 )

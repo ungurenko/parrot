@@ -11,10 +11,16 @@ pub struct Settings {
     pub onboarded: bool,
     #[serde(default = "default_engine")]
     pub engine: String,
+    #[serde(default = "default_language")]
+    pub language: String,
 }
 
 fn default_engine() -> String {
-    "qwen-0.6b".to_string()
+    "parakeet".to_string()
+}
+
+fn default_language() -> String {
+    "auto".to_string()
 }
 
 impl Default for Settings {
@@ -23,6 +29,7 @@ impl Default for Settings {
             save_dir: paths::default_save_dir(),
             onboarded: false,
             engine: default_engine(),
+            language: default_language(),
         }
     }
 }

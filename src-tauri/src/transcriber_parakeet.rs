@@ -18,6 +18,10 @@ pub fn preload(model_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn clear_cache() {
+    *MODEL.lock() = None;
+}
+
 fn get_or_load_model(model_dir: &Path) -> Result<Arc<Mutex<ParakeetTDT>>> {
     let mut guard = MODEL.lock();
     if guard.is_none() {
