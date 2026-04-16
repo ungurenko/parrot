@@ -13,7 +13,9 @@
 ## Команды
 
 - `npm run tauri dev` — dev-режим с hot-reload
-- `npm run tauri build` — сборка `.app` + `.dmg` в `src-tauri/target/release/bundle/`
+- `npm run build:local` — локальная сборка `.app` + `.dmg` без updater-подписи
+- `npm run release:mac` — релизная сборка с updater-подписью и свежим `latest.json`
+- `npm run check` — frontend build + Rust tests/fmt/clippy
 - `cargo check` (из `src-tauri/`) — быстрая проверка Rust
 - `npx tsc --noEmit` — проверка TypeScript
 
@@ -37,8 +39,8 @@
 
 ## Ключевые паттерны
 
-- **Движки транскрибации** — четыре реализации (Qwen3-ASR 1.7B/0.6B MLX, Parakeet, Whisper), выбор через `settings.engine`, диспатч в `queue::run_job`. Дефолт — `qwen-0.6b` (1.7B доступен как опция для 32+ ГБ RAM). Parakeet/Whisper preload-ятся на старте через `spawn_blocking`; Qwen — CLI per-job, но warmup через `transcriber_qwen::warmup_model` при нажатии «Подготовить модель».
-- **Отмена задач** — IPC `cancel_job(id)` ставит atomic-флаг + шлёт `SIGTERM` зарегистрированным PID (ffmpeg / yt-dlp / mlx-qwen3-asr). Нативный Rust-инференс Parakeet/Whisper отмену mid-way не поддерживает — досчитывает текущий вызов. Отменённые джобы эмитят `job:error` с сообщением `"Отменено пользователем"`.
+- **Движки транскрибации** — четыре реализации (Parakeet, Whisper, Qwen3-ASR 1.7B/0.6B MLX), выбор через `settings.engine`, диспатч в очереди. Дефолт — `parakeet`; Qwen показывается как недоступный, если CLI `mlx-qwen3-asr` не установлен.
+- **Отмена задач** — IPC `cancel_job(id)` ставит atomic-флаг + шлёт `SIGTERM` зарегистрированным PID (ffmpeg / yt-dlp / mlx-qwen3-asr). Отменённые джобы эмитят `job:canceled`, а фронт показывает отдельный статус `canceled`.
 - **Прогресс Qwen CLI** — CLI не выдаёт intermediate-прогресс. В `queue.rs` запускается async-ticker, который оценивает длительность WAV (файл всегда 16 kHz mono s16, поэтому `len / 32000`) и тикает 5→95% по elapsed × RTF (0.45 для 0.6B, 0.9 для 1.7B).
 - **Прогресс подготовки модели** — `download_model` для Qwen поллит размер `qwen-cache` относительно `EXPECTED_QWEN_*_BYTES`. События: `model:progress` (0–100) и `model:stage` (`downloading` → `warmup` → `ready`). Фронт показывает разный текст и пульсацию в стадии warmup.
 - **Проверка полноты модели Qwen** — `transcriber_qwen::model_cache_exists` сравнивает размер кеша с ожидаемым (≥90%). Защищает от запуска транскрибации при частично скачанной модели.
@@ -51,7 +53,7 @@
 
 | Engine | Файлы | Путь |
 |--------|-------|------|
-| **Qwen3-ASR 0.6B (дефолт)** | HF-модель `Qwen/Qwen3-ASR-0.6B`, CLI `mlx-qwen3-asr` | `…/qwen-cache/` (HF_HOME), CLI в `.qwen-mlx/venv/bin/` |
+| Qwen3-ASR 0.6B | HF-модель `Qwen/Qwen3-ASR-0.6B`, CLI `mlx-qwen3-asr` | `…/qwen-cache/` (HF_HOME), CLI в `.qwen-mlx/venv/bin/` |
 | Qwen3-ASR 1.7B | HF-модель `Qwen/Qwen3-ASR-1.7B` | там же |
 | Parakeet | `encoder-model.int8.onnx`, `decoder_joint-model.int8.onnx`, `vocab.txt` | `…/models/parakeet-v3/` |
 | Whisper | `ggml-large-v3-turbo-q5_0.bin` + `ggml-large-v3-turbo-encoder.mlmodelc/` | `~/Library/Application Support/com.alexk.parrot/models/` |

@@ -42,7 +42,21 @@ export function ResultView({ job }: Props) {
     );
   }
 
-  if (job.status !== "done" || !job.text) {
+  if (job.status === "canceled") {
+    return (
+      <Empty className="h-full border bg-muted/20">
+        <EmptyHeader>
+          <EmptyMedia className="text-2xl">🚫</EmptyMedia>
+          <EmptyTitle>Задача отменена</EmptyTitle>
+          <EmptyDescription>
+            Можно добавить файл заново, если расшифровка всё ещё нужна.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
+  if (job.status !== "done" || job.text === undefined) {
     return (
       <Empty className="h-full border bg-muted/20">
         <EmptyHeader>

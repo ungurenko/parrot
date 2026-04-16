@@ -21,26 +21,30 @@ static YT_DLP_HOLDER: OnceCell<Mutex<Child>> = OnceCell::new();
 fn target_triple() -> &'static str {
     // We only ship for macOS at the moment.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    { "aarch64-apple-darwin" }
+    {
+        "aarch64-apple-darwin"
+    }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    { "x86_64-apple-darwin" }
+    {
+        "x86_64-apple-darwin"
+    }
 }
 
 fn resolve_sidecar(app: &AppHandle, name: &str) -> Result<PathBuf> {
     // In production the binaries live in `<AppBundle>/Contents/Resources/` (without the suffix,
     // Tauri strips it when bundling). In dev we use the binaries/ folder next to Cargo.toml.
-    let resource_name = format!("{name}");
-    if let Ok(p) = app.path().resolve(&resource_name, tauri::path::BaseDirectory::Resource) {
+    let resource_name = name.to_string();
+    if let Ok(p) = app
+        .path()
+        .resolve(&resource_name, tauri::path::BaseDirectory::Resource)
+    {
         if p.exists() {
             return Ok(p);
         }
     }
-    // Dev fallback: walk up from exe to find src-tauri/binaries
+    // Production fallback: sidecars are next to the main executable in Contents/MacOS.
     let exe = std::env::current_exe()?;
-    let candidates = [
-        exe.parent().map(|p| p.join(format!("{name}-{}", target_triple()))),
-    ];
-    for c in candidates.into_iter().flatten() {
+    for c in sidecar_candidates(&exe, name) {
         if c.exists() {
             return Ok(c);
         }
@@ -54,6 +58,16 @@ fn resolve_sidecar(app: &AppHandle, name: &str) -> Result<PathBuf> {
         return Ok(dev_path);
     }
     Err(anyhow!("sidecar binary not found: {name}"))
+}
+
+fn sidecar_candidates(exe: &Path, name: &str) -> Vec<PathBuf> {
+    let Some(parent) = exe.parent() else {
+        return Vec::new();
+    };
+    vec![
+        parent.join(name),
+        parent.join(format!("{name}-{}", target_triple())),
+    ]
 }
 
 pub fn ffmpeg_path(app: &AppHandle) -> Result<PathBuf> {
@@ -106,10 +120,8 @@ async fn start_yt_dlp_startup_cache(yt_dlp: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let cache_root = std::env::temp_dir().join(format!(
-        "parrot-ytdlp-cache-{}",
-        std::process::id()
-    ));
+    let cache_root =
+        std::env::temp_dir().join(format!("parrot-ytdlp-cache-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&cache_root);
     std::fs::create_dir_all(&cache_root)?;
 
@@ -151,7 +163,10 @@ async fn start_yt_dlp_startup_cache(yt_dlp: &Path) -> Result<()> {
     apply_yt_dlp_startup_cache(&mut command);
     let status = command.status().await?;
     if !status.success() {
-        anyhow::bail!("yt-dlp startup cache warmup exited with {:?}", status.code());
+        anyhow::bail!(
+            "yt-dlp startup cache warmup exited with {:?}",
+            status.code()
+        );
     }
 
     Ok(())
@@ -182,4 +197,26 @@ fn find_pyinstaller_dir(cache_root: &Path) -> Result<Option<PathBuf>> {
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidecar_candidates_should_include_production_and_dev_names() {
+        let exe = PathBuf::from("/tmp/Parrot.app/Contents/MacOS/parrot");
+        let candidates = sidecar_candidates(&exe, "ffmpeg");
+
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/tmp/Parrot.app/Contents/MacOS/ffmpeg"),
+                PathBuf::from(format!(
+                    "/tmp/Parrot.app/Contents/MacOS/ffmpeg-{}",
+                    target_triple()
+                )),
+            ]
+        );
+    }
 }

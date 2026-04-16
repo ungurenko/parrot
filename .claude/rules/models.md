@@ -11,7 +11,7 @@ paths: "src-tauri/src/{model,paths,transcriber*}.rs"
 - whisper.cpp при поиске CoreML-файла стрипает `-qN_N` суффикс → ожидает `ggml-large-v3-turbo-encoder.mlmodelc` (без `-q5_0`)
 - Metal и CoreML активируются через feature flags `whisper-rs = { features = ["metal", "coreml"] }`
 
-## Qwen3-ASR 0.6B / 1.7B MLX (дефолт — 0.6B)
+## Qwen3-ASR 0.6B / 1.7B MLX
 
 - **Модели:** `Qwen/Qwen3-ASR-1.7B` и `Qwen/Qwen3-ASR-0.6B` на HuggingFace (MLX-порт, нативно на Apple Silicon).
 - **CLI:** `.qwen-mlx/venv/bin/mlx-qwen3-asr`, ищется также через `PARROT_QWEN_BIN`, старый `AUDIO_TO_TEXT_QWEN_BIN` и `$PATH` (см. `transcriber_qwen::resolve_cli`).
@@ -39,7 +39,8 @@ paths: "src-tauri/src/{model,paths,transcriber*}.rs"
 
 ## Логика выбора движка
 
-- `Settings.engine: "qwen-0.6b" | "qwen-1.7b" | "parakeet" | "whisper"`, дефолт `qwen-0.6b` (1.7B бьёт 16 ГБ RAM на длинных файлах) (serde `default_engine`).
+- `Settings.engine: "parakeet" | "whisper" | "qwen-0.6b" | "qwen-1.7b"`, дефолт `parakeet` (стабильный путь для обычного пользователя).
+- Qwen показывается как недоступный, если CLI `mlx-qwen3-asr` не найден.
 - `is_model_ready(app)` проверяет файлы активного движка (для Qwen — существование HF cache и CLI).
 - `download_model(app)` скачивает активный движок (для Qwen — вызывает `warmup_model`, который триггерит HF-скачивание).
 - `preload_active_engine(handle)` в `setup()` прогревает Parakeet/Whisper в фоне. Для Qwen preload пропускается — CLI стартует per-job.

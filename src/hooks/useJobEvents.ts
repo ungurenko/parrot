@@ -6,6 +6,7 @@ interface JobQueued { id: string; sourceName: string; }
 interface JobProgress { id: string; stage: JobStage; percent: number; }
 interface JobDone { id: string; text: string; outputPath: string; }
 interface JobError { id: string; message: string; }
+interface JobCanceled { id: string; }
 
 export function useJobEvents(
   setJobs: React.Dispatch<React.SetStateAction<Job[]>>,
@@ -35,7 +36,9 @@ export function useJobEvents(
       setJobs((prev) =>
         prev.map((j) =>
           j.id === e.payload.id
-            ? { ...j, status: "running", stage: e.payload.stage, percent: e.payload.percent }
+            ? j.status === "canceling" || j.status === "canceled"
+              ? j
+              : { ...j, status: "running", stage: e.payload.stage, percent: e.payload.percent }
             : j,
         ),
       );
@@ -66,6 +69,16 @@ export function useJobEvents(
         prev.map((j) =>
           j.id === e.payload.id
             ? { ...j, status: "error", error: e.payload.message, stage: null }
+            : j,
+        ),
+      );
+    }).then((u) => unlisteners.push(u));
+
+    listen<JobCanceled>("job:canceled", (e) => {
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === e.payload.id
+            ? { ...j, status: "canceled", error: undefined, stage: null, percent: 0 }
             : j,
         ),
       );

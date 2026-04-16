@@ -18,9 +18,8 @@ paths: "src-tauri/{capabilities/**,tauri.conf.json,src/lib.rs}"
 
 `src-tauri/capabilities/default.json` — список разрешений для frontend. Минимум нужен:
 - `core:default`, `core:event:default`, `core:window:default`, `core:webview:default`, `core:path:default`
-- `opener:default`, `dialog:default`, `fs:default`, `fs:allow-read-text-file`
-- `shell:default`, `shell:allow-open`
-- `store:default`
+- `opener:default`, `dialog:default`
+- `updater:default`, `process:default`
 
 Sidecar-исполнение в Rust-коде (не из JS) не требует `shell:allow-execute`.
 

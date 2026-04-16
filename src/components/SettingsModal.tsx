@@ -23,8 +23,8 @@ import {
   ENGINE_LABEL,
   LANGUAGE_LABEL,
   type Engine,
+  type EngineStatuses,
   type ModelProgressDetail,
-  type ModelStatuses,
   type Settings,
   type TranscriptLanguage,
 } from "../types";
@@ -38,7 +38,7 @@ interface Props {
 export function SettingsModal({ onClose }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [appVersion, setAppVersion] = useState("");
-  const [modelStatuses, setModelStatuses] = useState<ModelStatuses>({});
+  const [modelStatuses, setModelStatuses] = useState<EngineStatuses>({});
   const [busyEngine, setBusyEngine] = useState<Engine | null>(null);
   const [deletingEngine, setDeletingEngine] = useState<Engine | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -50,7 +50,7 @@ export function SettingsModal({ onClose }: Props) {
   );
 
   const refreshModelStatuses = () =>
-    invoke<ModelStatuses>("get_model_statuses").then(setModelStatuses);
+    invoke<EngineStatuses>("get_engine_statuses").then(setModelStatuses);
 
   useEffect(() => {
     invoke<Settings>("get_settings").then(setSettings);
@@ -81,23 +81,37 @@ export function SettingsModal({ onClose }: Props) {
     const result = await open({ directory: true, multiple: false });
     if (!result || !settings) return;
     const next = { ...settings, save_dir: result as string };
-    setSettings(next);
-    await invoke("set_settings", { new: next });
+    try {
+      await invoke("set_settings", { new: next });
+      setSettings(next);
+      setModelError(null);
+    } catch (e: unknown) {
+      setModelError(String(e));
+    }
   };
 
   const changeEngine = async (engine: Engine) => {
     if (!settings) return;
     const next = { ...settings, engine };
-    setSettings(next);
-    setModelError(null);
-    await invoke("set_settings", { new: next });
+    try {
+      await invoke("set_settings", { new: next });
+      setSettings(next);
+      setModelError(null);
+    } catch (e: unknown) {
+      setModelError(String(e));
+    }
   };
 
   const changeLanguage = async (language: TranscriptLanguage) => {
     if (!settings) return;
     const next = { ...settings, language };
-    setSettings(next);
-    await invoke("set_settings", { new: next });
+    try {
+      await invoke("set_settings", { new: next });
+      setSettings(next);
+      setModelError(null);
+    } catch (e: unknown) {
+      setModelError(String(e));
+    }
   };
 
   const prepareModel = async (engine: Engine) => {
@@ -110,7 +124,7 @@ export function SettingsModal({ onClose }: Props) {
       await invoke("download_model_for_engine", { engine });
       setModelProgress(100);
       await refreshModelStatuses();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setModelError(String(e));
     } finally {
       setBusyEngine(null);
@@ -118,7 +132,7 @@ export function SettingsModal({ onClose }: Props) {
   };
 
   const deleteModel = async (engine: Engine) => {
-    if (!modelStatuses[engine]) return;
+    if (!modelStatuses[engine]?.modelReady) return;
     const ok = window.confirm(
       `Вы уверены, что хотите удалить модель «${ENGINE_LABEL[engine]}»?\n\nТексты и настройки останутся на месте. Если модель понадобится снова, ее можно будет скачать заново.`,
     );
@@ -128,10 +142,10 @@ export function SettingsModal({ onClose }: Props) {
     setModelError(null);
     try {
       await invoke("delete_model_for_engine", { engine });
-      setModelStatuses((current) => ({ ...current, [engine]: false }));
+      await refreshModelStatuses();
       setModelProgress(0);
       setModelProgressDetail(null);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setModelError(String(e));
       await refreshModelStatuses();
     } finally {

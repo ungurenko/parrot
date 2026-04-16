@@ -11,11 +11,6 @@
     "core:path:default",
     "opener:default",
     "dialog:default",
-    "fs:default",
-    "fs:allow-read-text-file",
-    "shell:default",
-    "shell:allow-open",
-    "store:default",
     "updater:default",
     "process:default"
   ]

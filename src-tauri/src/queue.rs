@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
 use crate::cancellation::{CancelRegistry, CancelToken};
-use crate::{paths, settings, source, transcriber, transcriber_parakeet, transcriber_qwen, writer};
+use crate::{paths, source, transcriber, transcriber_parakeet, transcriber_qwen, writer};
 
 const CANCELLED_MESSAGE: &str = "Отменено пользователем";
 
@@ -29,6 +29,9 @@ pub struct Job {
     pub id: String,
     pub source: SourceKind,
     pub display_name: String,
+    pub engine: String,
+    pub language: String,
+    pub save_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +62,12 @@ pub struct JobDoneEvent {
 pub struct JobErrorEvent {
     pub id: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobCanceledEvent {
+    pub id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +115,10 @@ impl JobQueue {
     pub fn cancel_registry(&self) -> CancelRegistry {
         self.cancel.clone()
     }
+
+    pub fn app_handle(&self) -> AppHandle {
+        self.app.clone()
+    }
 }
 
 impl JobQueue {
@@ -139,20 +152,22 @@ impl JobQueue {
     pub async fn enqueue(&self, job: Job) -> Result<()> {
         let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         self.cancel.create(&job.id);
+        let _ = self.app.emit(
+            "job:queued",
+            JobQueuedEvent {
+                id: job.id.clone(),
+                source_name: job.display_name.clone(),
+            },
+        );
         let tx = self.sender.lock().await;
         tx.send(QueuedJob {
             sequence,
             job: job.clone(),
         })
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-        let _ = self.app.emit(
-            "job:queued",
-            JobQueuedEvent {
-                id: job.id,
-                source_name: job.display_name,
-            },
-        );
+        .map_err(|e| {
+            self.cancel.remove(&job.id);
+            anyhow::anyhow!(e.to_string())
+        })?;
         Ok(())
     }
 }
@@ -174,11 +189,7 @@ async fn prep_worker(
         };
 
         let token = cancel.get(&queued.job.id);
-        if token
-            .as_ref()
-            .map(|t| t.is_cancelled())
-            .unwrap_or(false)
-        {
+        if token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
             let outcome = PreparedOutcome::Failed {
                 sequence: queued.sequence,
                 job: queued.job,
@@ -239,13 +250,10 @@ async fn handle_prepared_outcome(
     match outcome {
         PreparedOutcome::Ready(prepared) => {
             let job = prepared.job.clone();
+            let wav_path = prepared.wav_path.clone();
             let token = cancel.get(&job.id);
-            if token
-                .as_ref()
-                .map(|t| t.is_cancelled())
-                .unwrap_or(false)
-            {
-                emit_error(app, &job, CANCELLED_MESSAGE.to_string());
+            if token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+                emit_canceled(app, &job);
                 cancel.remove(&job.id);
                 cleanup_wav(&prepared.wav_path);
                 return;
@@ -268,15 +276,24 @@ async fn handle_prepared_outcome(
                     } else {
                         format!("{e:#}")
                     };
-                    tracing::error!("job {} failed: {message}", job.id);
-                    emit_error(app, &job, message);
+                    if message == CANCELLED_MESSAGE {
+                        emit_canceled(app, &job);
+                    } else {
+                        tracing::error!("job {} failed: {message}", job.id);
+                        emit_error(app, &job, message);
+                    }
                     cancel.remove(&job.id);
+                    cleanup_wav(&wav_path);
                 }
             }
         }
         PreparedOutcome::Failed { job, message, .. } => {
-            tracing::error!("job {} failed: {message}", job.id);
-            emit_error(app, &job, message);
+            if message == CANCELLED_MESSAGE {
+                emit_canceled(app, &job);
+            } else {
+                tracing::error!("job {} failed: {message}", job.id);
+                emit_error(app, &job, message);
+            }
             cancel.remove(&job.id);
         }
     }
@@ -288,10 +305,9 @@ async fn prepare_job(
     token: Option<Arc<CancelToken>>,
 ) -> Result<PreparedJob> {
     let started = Instant::now();
-    let cfg = settings::load(app);
-    ensure_model_ready(app, &cfg.engine)?;
 
     let job = queued.job;
+    ensure_model_ready(app, &job.engine)?;
     let tmp = paths::tmp_dir(app)?;
     let wav_path = tmp.join(format!("{}.wav", job.id));
 
@@ -315,17 +331,11 @@ async fn prepare_job(
             let app_for_cb = app.clone();
             let id_for_cb = job.id.clone();
             let downloading_started = Instant::now();
-            let yt = source::youtube::download_wav(
-                app,
-                url,
-                &tmp,
-                &job.id,
-                token.clone(),
-                move |p| {
+            let yt =
+                source::youtube::download_wav(app, url, &tmp, &job.id, token.clone(), move |p| {
                     emit_progress(&app_for_cb, &id_for_cb, "downloading", p.max(1));
-                },
-            )
-            .await?;
+                })
+                .await?;
             emit_progress(app, &job.id, "downloading", 100);
             tracing::info!(
                 "job {} downloaded and normalized YouTube audio in {:.2}s",
@@ -340,11 +350,7 @@ async fn prepare_job(
     };
 
     let prepared_in = started.elapsed();
-    tracing::info!(
-        "job {} prepared in {:.2}s",
-        job.id,
-        seconds(prepared_in)
-    );
+    tracing::info!("job {} prepared in {:.2}s", job.id, seconds(prepared_in));
 
     Ok(PreparedJob {
         sequence: queued.sequence,
@@ -367,9 +373,8 @@ async fn transcribe_prepared(
         prepared_in,
         ..
     } = prepared;
-    let cfg = settings::load(app);
-    let engine = cfg.engine.clone();
-    let language = cfg.language.clone();
+    let engine = job.engine.clone();
+    let language = job.language.clone();
     ensure_model_ready(app, &engine)?;
 
     emit_progress(app, &job.id, "transcribing", 1);
@@ -379,6 +384,7 @@ async fn transcribe_prepared(
     let language_for_task = language.clone();
     let app_for_task = app.clone();
     let wav_for_task = wav_path.clone();
+    let token_for_task = token.clone();
     let transcribing_started = Instant::now();
 
     // Qwen CLI runs as a subprocess without intermediate progress output.
@@ -438,16 +444,14 @@ async fn transcribe_prepared(
                 let model = paths::model_path(&app_for_task)?;
                 transcriber::transcribe_wav(&model, &wav_for_task, &language_for_task, progress)
             }
-            engine if transcriber_qwen::is_qwen_engine(engine) => {
-                transcriber_qwen::transcribe_wav(
-                    &app_for_task,
-                    &wav_for_task,
-                    engine,
-                    &language_for_task,
-                    token.clone(),
-                    progress,
-                )
-            }
+            engine if transcriber_qwen::is_qwen_engine(engine) => transcriber_qwen::transcribe_wav(
+                &app_for_task,
+                &wav_for_task,
+                engine,
+                &language_for_task,
+                token_for_task.clone(),
+                progress,
+            ),
             other => anyhow::bail!("Неизвестный движок транскрибации: {other}"),
         }
     })
@@ -457,11 +461,14 @@ async fn transcribe_prepared(
         h.abort();
     }
     let text = text??;
+    if token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+        cleanup_wav(&wav_path);
+        anyhow::bail!("cancelled");
+    }
     let transcribed_in = transcribing_started.elapsed();
 
     let save_started = Instant::now();
-    let settings = settings::load(app);
-    let out = writer::save_text(&settings.save_dir, &stem, &text)?;
+    let out = writer::save_text(&job.save_dir, &stem, &text)?;
     let saved_in = save_started.elapsed();
     cleanup_wav(&wav_path);
 
@@ -516,6 +523,10 @@ fn emit_error(app: &AppHandle, job: &Job, message: String) {
             message,
         },
     );
+}
+
+fn emit_canceled(app: &AppHandle, job: &Job) {
+    let _ = app.emit("job:canceled", JobCanceledEvent { id: job.id.clone() });
 }
 
 fn cleanup_wav(path: &Path) {

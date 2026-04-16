@@ -28,6 +28,7 @@ import {
   ENGINE_LABEL,
   ENGINE_SIZE,
   type Engine,
+  type EngineStatuses,
   type ModelProgressDetail,
   type Settings,
 } from "../types";
@@ -43,14 +44,17 @@ type ModelStage = "downloading" | "warmup" | "ready";
 export function Onboarding({ onDone }: Props) {
   const [step, setStep] = useState<Step>("folder");
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [engineStatuses, setEngineStatuses] = useState<EngineStatuses>({});
   const [progress, setProgress] = useState(0);
   const [progressDetail, setProgressDetail] =
     useState<ModelProgressDetail | null>(null);
   const [modelStage, setModelStage] = useState<ModelStage>("downloading");
   const [error, setError] = useState<string | null>(null);
+  const selectedEngineStatus = settings ? engineStatuses[settings.engine] : undefined;
 
   useEffect(() => {
     invoke<Settings>("get_settings").then(setSettings);
+    invoke<EngineStatuses>("get_engine_statuses").then(setEngineStatuses);
   }, []);
 
   useEffect(() => {
@@ -75,15 +79,25 @@ export function Onboarding({ onDone }: Props) {
     const result = await open({ directory: true, multiple: false });
     if (!result || !settings) return;
     const next = { ...settings, save_dir: result as string };
-    setSettings(next);
-    await invoke("set_settings", { new: next });
+    try {
+      await invoke("set_settings", { new: next });
+      setSettings(next);
+      setError(null);
+    } catch (e: unknown) {
+      setError(String(e));
+    }
   };
 
   const changeEngine = async (engine: Engine) => {
     if (!settings) return;
     const next = { ...settings, engine };
-    setSettings(next);
-    await invoke("set_settings", { new: next });
+    try {
+      await invoke("set_settings", { new: next });
+      setSettings(next);
+      setError(null);
+    } catch (e: unknown) {
+      setError(String(e));
+    }
   };
 
   const downloadModel = async () => {
@@ -94,8 +108,9 @@ export function Onboarding({ onDone }: Props) {
     setError(null);
     try {
       await invoke("download_model");
+      invoke<EngineStatuses>("get_engine_statuses").then(setEngineStatuses);
       setStep("ready");
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(String(e));
       setStep("model");
     }
@@ -124,6 +139,14 @@ export function Onboarding({ onDone }: Props) {
         </CardHeader>
 
         <CardContent>
+          {error && step !== "model" && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertDescription className="whitespace-pre-wrap">
+                {error}
+              </AlertDescription>
+            </Alert>
+          )}
+
           {step === "folder" && settings && (
             <FieldGroup>
               <Field>
@@ -157,7 +180,11 @@ export function Onboarding({ onDone }: Props) {
                 <FieldDescription>
                   Можно будет поменять в настройках.
                 </FieldDescription>
-                <EnginePicker value={settings.engine} onChange={changeEngine} />
+                <EnginePicker
+                  value={settings.engine}
+                  statuses={engineStatuses}
+                  onChange={changeEngine}
+                />
               </Field>
             </FieldGroup>
           )}
@@ -233,7 +260,12 @@ export function Onboarding({ onDone }: Props) {
               <Button variant="outline" onClick={() => setStep("engine")}>
                 Назад
               </Button>
-              <Button onClick={downloadModel}>Подготовить модель</Button>
+              <Button
+                onClick={downloadModel}
+                disabled={selectedEngineStatus?.available === false}
+              >
+                Подготовить модель
+              </Button>
             </>
           )}
           {step === "ready" && (

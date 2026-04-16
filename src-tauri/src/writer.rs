@@ -46,5 +46,4 @@ mod tests {
         assert_eq!(sanitize_stem("  name  "), "name");
         assert_eq!(sanitize_stem(""), "transcript");
     }
-
 }

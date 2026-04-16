@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
 const LEGACY_IDENTIFIER: &str = "com.alexk.audiototext";
@@ -68,17 +68,25 @@ pub fn qwen_cache_dir(app: &AppHandle) -> Result<PathBuf> {
 }
 
 pub fn parakeet_files_ready(app: &AppHandle) -> bool {
-    let Ok(dir) = parakeet_dir(app) else { return false };
-    if !dir.join("vocab.txt").exists() {
+    let Ok(dir) = parakeet_dir(app) else {
+        return false;
+    };
+    if !file_has_content(&dir.join("vocab.txt")) {
         return false;
     }
     // Accept either the int8 variant (faster, default) or the fp32 variant.
-    let has_encoder = dir.join("encoder-model.int8.onnx").exists()
-        || (dir.join("encoder-model.onnx").exists()
-            && dir.join("encoder-model.onnx.data").exists());
-    let has_decoder = dir.join("decoder_joint-model.int8.onnx").exists()
-        || dir.join("decoder_joint-model.onnx").exists();
+    let has_encoder = file_has_content(&dir.join("encoder-model.int8.onnx"))
+        || (file_has_content(&dir.join("encoder-model.onnx"))
+            && file_has_content(&dir.join("encoder-model.onnx.data")));
+    let has_decoder = file_has_content(&dir.join("decoder_joint-model.int8.onnx"))
+        || file_has_content(&dir.join("decoder_joint-model.onnx"));
     has_encoder && has_decoder
+}
+
+fn file_has_content(path: &Path) -> bool {
+    path.metadata()
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false)
 }
 
 pub fn settings_path(app: &AppHandle) -> Result<PathBuf> {

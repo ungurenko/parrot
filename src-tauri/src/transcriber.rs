@@ -87,9 +87,7 @@ fn read_wav_samples(path: &Path) -> Result<Vec<f32>> {
             .samples::<i16>()
             .map(|s| s.map(|v| v as f32 / 32_768.0))
             .collect::<Result<Vec<_>, _>>()?,
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .collect::<Result<Vec<_>, _>>()?,
+        hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<Vec<_>, _>>()?,
     };
     Ok(samples)
 }

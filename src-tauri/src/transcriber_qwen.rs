@@ -3,6 +3,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::env;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -20,6 +21,7 @@ const MODEL_QWEN_1_7B: &str = "Qwen/Qwen3-ASR-1.7B";
 const SERVER_HOST: &str = "127.0.0.1";
 const SERVER_API_KEY: &str = "parrot-local-qwen";
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(90);
+const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// Expected cache size per model (safetensors + tokenizer + config).
 /// Used to detect incomplete downloads.
@@ -70,9 +72,20 @@ pub fn is_ready(app: &AppHandle, engine: &str) -> bool {
     resolve_cli().is_ok() && model_cache_exists(app, engine)
 }
 
+pub fn unavailable_reason() -> Option<String> {
+    if resolve_cli().is_ok() {
+        None
+    } else {
+        Some(
+            "Qwen MLX пока не установлен на этом Mac. Для стабильной версии используйте Parakeet или Whisper."
+                .to_string(),
+        )
+    }
+}
+
 pub fn warmup_model(app: &AppHandle, engine: &str) -> Result<()> {
-    let model = model_for_engine(engine)
-        .ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
+    let model =
+        model_for_engine(engine).ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
     let cli = resolve_cli()?;
     let cache_dir = paths::qwen_cache_dir(app)?;
     let tmp = paths::tmp_dir(app)?;
@@ -117,8 +130,8 @@ pub fn transcribe_wav(
     cancel: Option<Arc<CancelToken>>,
     progress_cb: impl Fn(u32) + Send + Sync,
 ) -> Result<String> {
-    let model = model_for_engine(engine)
-        .ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
+    let model =
+        model_for_engine(engine).ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
 
     progress_cb(5);
     match transcribe_with_server(app, wav_path, engine, model, language, cancel.clone()) {
@@ -130,9 +143,7 @@ pub fn transcribe_wav(
             if cancel.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
                 return Err(anyhow!("cancelled"));
             }
-            tracing::warn!(
-                "Qwen warm server failed, falling back to per-job CLI: {e:#}"
-            );
+            tracing::warn!("Qwen warm server failed, falling back to per-job CLI: {e:#}");
         }
     }
 
@@ -213,10 +224,7 @@ fn ensure_server_locked(
     guard: &mut Option<QwenServer>,
 ) -> Result<(String, u32)> {
     if let Some(server) = guard.as_mut() {
-        if server.engine == engine
-            && server.child.try_wait()?.is_none()
-            && health_ok(server.port)
-        {
+        if server.engine == engine && server.child.try_wait()?.is_none() && health_ok(server.port) {
             return Ok((server.url(), server.pid()));
         }
     }
@@ -225,8 +233,8 @@ fn ensure_server_locked(
         old.stop();
     }
 
-    let model = model_for_engine(engine)
-        .ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
+    let model =
+        model_for_engine(engine).ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
     let cli = resolve_cli()?;
     let cache_dir = paths::qwen_cache_dir(app)?;
     let port = find_free_port()?;
@@ -256,12 +264,12 @@ fn ensure_server_locked(
 }
 
 fn post_to_server(url: &str, wav_path: &Path, model: &str, language: &str) -> Result<String> {
-    let bytes = std::fs::read(wav_path)?;
+    let file = File::open(wav_path)?;
     let file_name = wav_path
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "audio.wav".to_string());
-    let part = reqwest::blocking::multipart::Part::bytes(bytes)
+    let part = reqwest::blocking::multipart::Part::reader(file)
         .file_name(file_name)
         .mime_str("audio/wav")?;
     let mut form = reqwest::blocking::multipart::Form::new()
@@ -272,7 +280,9 @@ fn post_to_server(url: &str, wav_path: &Path, model: &str, language: &str) -> Re
         form = form.text("language", qwen_language.to_string());
     }
 
-    let client = reqwest::blocking::Client::builder().build()?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(SERVER_REQUEST_TIMEOUT)
+        .build()?;
     let response = client
         .post(format!("{url}/v1/audio/transcriptions"))
         .bearer_auth(SERVER_API_KEY)
@@ -285,7 +295,11 @@ fn post_to_server(url: &str, wav_path: &Path, model: &str, language: &str) -> Re
         return Err(anyhow!("Qwen server returned {status}: {body}"));
     }
 
-    Ok(response.json::<TranscriptionResponse>()?.text.trim().to_string())
+    Ok(response
+        .json::<TranscriptionResponse>()?
+        .text
+        .trim()
+        .to_string())
 }
 
 fn qwen_language(language: &str) -> Option<&'static str> {

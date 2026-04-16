@@ -18,6 +18,35 @@ pub fn is_supported_file(path: &Path) -> bool {
 
 pub fn is_youtube_url(s: &str) -> bool {
     let s = s.trim();
-    (s.contains("youtube.com/") || s.contains("youtu.be/"))
-        && (s.starts_with("http://") || s.starts_with("https://"))
+    let Ok(url) = reqwest::Url::parse(s) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    matches!(
+        url.host_str(),
+        Some(
+            "youtube.com" | "www.youtube.com" | "m.youtube.com" | "music.youtube.com" | "youtu.be"
+        )
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_youtube_url_should_accept_real_youtube_hosts() {
+        assert!(is_youtube_url("https://www.youtube.com/watch?v=abc"));
+        assert!(is_youtube_url("https://youtu.be/abc"));
+    }
+
+    #[test]
+    fn is_youtube_url_should_reject_lookalike_hosts() {
+        assert!(!is_youtube_url(
+            "https://example.com/watch?next=youtube.com/watch"
+        ));
+        assert!(!is_youtube_url("https://youtube.com.evil.test/watch"));
+    }
 }

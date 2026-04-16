@@ -6,12 +6,15 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 
 use crate::binaries;
 use crate::cancellation::CancelToken;
 
 const FAST_YOUTUBE_ARGS: &str =
     "youtube:player_client=android_vr;player_skip=js;skip=hls,dash,translated_subs";
+const YT_DLP_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
+const FFMPEG_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 pub struct YouTubeAudio {
     pub wav_path: PathBuf,
@@ -52,8 +55,16 @@ pub async fn download_wav(
             );
             cleanup_partial_downloads(workdir, stem);
             on_progress(1);
-            download_raw_audio(&yt_dlp, url, workdir, stem, None, cancel.as_ref(), &on_progress)
-                .await?
+            download_raw_audio(
+                &yt_dlp,
+                url,
+                workdir,
+                stem,
+                None,
+                cancel.as_ref(),
+                &on_progress,
+            )
+            .await?
         }
     };
     on_progress(100);
@@ -103,6 +114,7 @@ async fn download_raw_audio(
         .arg(url)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()?;
 
     let pid = child.id();
@@ -110,30 +122,44 @@ async fn download_raw_audio(
         tok.register_pid(pid);
     }
 
-    let stderr_task = child.stderr.take().map(|stderr| {
-        tauri::async_runtime::spawn(async move { collect_tail(stderr, 20).await })
-    });
+    let stderr_task = child
+        .stderr
+        .take()
+        .map(|stderr| tauri::async_runtime::spawn(async move { collect_tail(stderr, 20).await }));
 
-    let mut title: Option<String> = None;
-    if let Some(stdout) = child.stdout.take() {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Some(line) = lines.next_line().await? {
-            if let Some(p) = parse_progress(&line) {
-                on_progress(p);
-            } else if let Some(t) = parse_title(&line) {
-                title = Some(t);
+    let wait_result = timeout(YT_DLP_TIMEOUT, async move {
+        let mut title: Option<String> = None;
+        if let Some(stdout) = child.stdout.take() {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Some(line) = lines.next_line().await? {
+                if let Some(p) = parse_progress(&line) {
+                    on_progress(p);
+                } else if let Some(t) = parse_title(&line) {
+                    title = Some(t);
+                }
             }
         }
-    }
 
-    let status = child.wait().await?;
+        let status = child.wait().await?;
+        let stderr_tail = match stderr_task {
+            Some(task) => task.await.unwrap_or_default(),
+            None => Vec::new(),
+        };
+        Ok::<_, anyhow::Error>((status, stderr_tail, title))
+    })
+    .await;
+
     if let (Some(tok), Some(pid)) = (cancel, pid) {
         tok.unregister_pid(pid);
     }
-    let stderr_tail = match stderr_task {
-        Some(task) => task.await.unwrap_or_default(),
-        None => Vec::new(),
+
+    let (status, stderr_tail, title) = match wait_result {
+        Ok(result) => result?,
+        Err(_) => {
+            return Err(anyhow!("YouTube-загрузка не ответила за отведенное время"));
+        }
     };
+
     if !status.success() {
         if cancel.map(|t| t.is_cancelled()).unwrap_or(false) {
             return Err(anyhow!("cancelled"));
@@ -165,7 +191,7 @@ async fn normalize_audio(
         .arg("-loglevel")
         .arg("error")
         .arg("-i")
-        .arg(&raw_audio)
+        .arg(raw_audio)
         .arg("-vn")
         .arg("-ac")
         .arg("1")
@@ -176,12 +202,21 @@ async fn normalize_audio(
         .arg(&final_wav)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()?;
     let pid = child.id();
     if let (Some(tok), Some(pid)) = (cancel, pid) {
         tok.register_pid(pid);
     }
-    let norm_output = child.wait_with_output().await?;
+    let norm_output = match timeout(FFMPEG_TIMEOUT, child.wait_with_output()).await {
+        Ok(output) => output?,
+        Err(_) => {
+            if let (Some(tok), Some(pid)) = (cancel, pid) {
+                tok.unregister_pid(pid);
+            }
+            return Err(anyhow!("ffmpeg не ответил за отведенное время"));
+        }
+    };
     if let (Some(tok), Some(pid)) = (cancel, pid) {
         tok.unregister_pid(pid);
     }
@@ -203,10 +238,7 @@ fn find_downloaded(workdir: &Path, stem: &str) -> Result<PathBuf> {
         let path = entry.path();
         let file_stem = path.file_stem().and_then(|s| s.to_str());
         if file_stem == Some(stem) {
-            let ext = path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
             // Skip our own final wav if it somehow exists.
             if ext != "wav" {
                 return Ok(path);

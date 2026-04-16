@@ -4,9 +4,12 @@ use std::process::Stdio;
 use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 
 use crate::binaries;
 use crate::cancellation::CancelToken;
+
+const FFMPEG_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// Extract a 16 kHz mono PCM16 WAV from any audio or video file using bundled ffmpeg.
 pub async fn extract_wav(
@@ -34,13 +37,22 @@ pub async fn extract_wav(
         .arg(out_wav)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()?;
 
     let pid = child.id();
     if let (Some(tok), Some(pid)) = (cancel.as_ref(), pid) {
         tok.register_pid(pid);
     }
-    let output = child.wait_with_output().await?;
+    let output = match timeout(FFMPEG_TIMEOUT, child.wait_with_output()).await {
+        Ok(output) => output?,
+        Err(_) => {
+            if let (Some(tok), Some(pid)) = (cancel.as_ref(), pid) {
+                tok.unregister_pid(pid);
+            }
+            return Err(anyhow!("ffmpeg не ответил за отведенное время"));
+        }
+    };
     if let (Some(tok), Some(pid)) = (cancel.as_ref(), pid) {
         tok.unregister_pid(pid);
     }

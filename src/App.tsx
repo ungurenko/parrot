@@ -36,6 +36,16 @@ function App() {
 
   useJobEvents(setJobs, useCallback((j: Job) => setSelectedId(j.id), []));
 
+  const markCanceling = useCallback((id: string) => {
+    setJobs((current) =>
+      current.map((job) =>
+        job.id === id && (job.status === "queued" || job.status === "running")
+          ? { ...job, status: "canceling" as const, stage: null }
+          : job,
+      ),
+    );
+  }, []);
+
   const handleFiles = useCallback(async (paths: string[]) => {
     for (const p of paths) {
       try {
@@ -131,6 +141,7 @@ function App() {
             <JobList
               jobs={jobs}
               onSelect={(j) => setSelectedId(j.id)}
+              onCancel={markCanceling}
               selectedId={selectedId}
             />
           </ScrollArea>

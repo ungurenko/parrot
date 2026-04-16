@@ -1,4 +1,4 @@
-export type JobStatus = "queued" | "running" | "done" | "error";
+export type JobStatus = "queued" | "running" | "canceling" | "canceled" | "done" | "error";
 
 export type JobStage = "preparing" | "extracting" | "downloading" | "transcribing" | null;
 
@@ -32,6 +32,14 @@ export const ENGINE_SIZE: Record<Engine, string> = {
 export const isQwenEngine = (engine: Engine) => engine.startsWith("qwen-");
 
 export type ModelStatuses = Partial<Record<Engine, boolean>>;
+
+export interface EngineStatus {
+  available: boolean;
+  modelReady: boolean;
+  unavailableReason?: string | null;
+}
+
+export type EngineStatuses = Partial<Record<Engine, EngineStatus>>;
 
 export interface ModelProgressDetail {
   percent: number;

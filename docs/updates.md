@@ -24,16 +24,10 @@ export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 5. Собрать приложение:
 
 ```bash
-npm run tauri build
+npm run release:mac
 ```
 
-6. Создать `latest.json`:
-
-```bash
-npm run release:latest-json
-```
-
-7. Загрузить в GitHub Releases:
+6. Загрузить в GitHub Releases:
    - `src-tauri/target/release/bundle/dmg/Parrot_0.1.0_aarch64.dmg`
    - `src-tauri/target/release/bundle/macos/Parrot.app.tar.gz`
    - `src-tauri/target/release/bundle/macos/Parrot.app.tar.gz.sig`

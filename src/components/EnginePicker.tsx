@@ -11,13 +11,13 @@ import {
   ENGINE_SIZE,
   isQwenEngine,
   type Engine,
+  type EngineStatuses,
   type ModelProgressDetail,
-  type ModelStatuses,
 } from "../types";
 
 interface Props {
   value: Engine;
-  statuses?: ModelStatuses;
+  statuses?: EngineStatuses;
   busyEngine?: Engine | null;
   deletingEngine?: Engine | null;
   progress?: number;
@@ -86,7 +86,9 @@ export function EnginePicker({
     <div className="flex w-full min-w-0 flex-col gap-2 overflow-x-hidden">
       {OPTIONS.map((opt) => {
         const active = value === opt.id;
-        const ready = Boolean(statuses[opt.id]);
+        const status = statuses[opt.id];
+        const available = status?.available ?? true;
+        const ready = Boolean(status?.modelReady);
         const preparing = busyEngine === opt.id;
         const deleting = deletingEngine === opt.id;
         const prepareLabel = isQwenEngine(opt.id)
@@ -108,10 +110,11 @@ export function EnginePicker({
             <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
               <button
                 type="button"
-                onClick={() => onChange(opt.id)}
-                title={active ? "Эта модель выбрана" : "Выбрать эту модель"}
-                className="flex min-w-0 flex-1 items-start gap-3 rounded-md text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-              >
+                  onClick={() => onChange(opt.id)}
+                  disabled={!available}
+                  title={active ? "Эта модель выбрана" : "Выбрать эту модель"}
+                  className="flex min-w-0 flex-1 items-start gap-3 rounded-md text-left outline-none disabled:cursor-not-allowed disabled:opacity-60 focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
                 <span
                   className={cn(
                     "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border text-xs",
@@ -133,9 +136,10 @@ export function EnginePicker({
                         Выбрана
                       </Badge>
                     )}
+                    {!available && <Badge variant="secondary">Недоступна</Badge>}
                   </span>
                   <span className="mt-1 block whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
-                    {opt.hint}
+                    {status?.unavailableReason ?? opt.hint}
                   </span>
                 </span>
               </button>
@@ -154,7 +158,7 @@ export function EnginePicker({
                   </Badge>
                 )}
 
-                {!ready && onPrepare && (
+                {!ready && onPrepare && available && (
                   <Button
                     type="button"
                     variant="outline"

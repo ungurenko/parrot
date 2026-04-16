@@ -15,6 +15,7 @@ import type { Job } from "../types";
 interface Props {
   jobs: Job[];
   onSelect: (job: Job) => void;
+  onCancel: (id: string) => void;
   selectedId: string | null;
 }
 
@@ -22,6 +23,8 @@ const CANCELLED_MARKER = "Отменено пользователем";
 
 function stageLabel(job: Job): string {
   if (job.status === "queued") return "В очереди";
+  if (job.status === "canceling") return "Отменяю…";
+  if (job.status === "canceled") return "Отменено";
   if (job.status === "done") return "Готово";
   if (job.status === "error") {
     return job.error === CANCELLED_MARKER ? "Отменено" : "Ошибка";
@@ -53,6 +56,8 @@ function progressValue(job: Job): number {
 
 function icon(job: Job): string {
   if (job.status === "queued") return "⏸";
+  if (job.status === "canceling") return "…";
+  if (job.status === "canceled") return "🚫";
   if (job.status === "done") return "✅";
   if (job.status === "error") {
     return job.error === CANCELLED_MARKER ? "🚫" : "⚠️";
@@ -62,8 +67,9 @@ function icon(job: Job): string {
 
 function badgeVariant(job: Job): React.ComponentProps<typeof Badge>["variant"] {
   if (job.status === "done") return "default";
+  if (job.status === "canceled") return "outline";
   if (job.status === "error") return "destructive";
-  if (job.status === "running") return "secondary";
+  if (job.status === "running" || job.status === "canceling") return "secondary";
   return "outline";
 }
 
@@ -75,7 +81,7 @@ async function cancelJob(id: string) {
   }
 }
 
-export function JobList({ jobs, onSelect, selectedId }: Props) {
+export function JobList({ jobs, onSelect, onCancel, selectedId }: Props) {
   if (jobs.length === 0) {
     return (
       <Empty className="min-h-40 border bg-background/60">
@@ -124,12 +130,14 @@ export function JobList({ jobs, onSelect, selectedId }: Props) {
               <Progress value={progressValue(job)} className="mt-2 h-1.5" />
             )}
           </div>
-          {(job.status === "queued" || job.status === "running") && (
+          {(job.status === "queued" || job.status === "running" || job.status === "canceling") && (
             <Button
               variant="ghost"
               size="icon-xs"
+              disabled={job.status === "canceling"}
               onClick={(e) => {
                 e.stopPropagation();
+                onCancel(job.id);
                 cancelJob(job.id);
               }}
               title="Отменить"

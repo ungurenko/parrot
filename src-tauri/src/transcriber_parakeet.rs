@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Result};
 use once_cell::sync::Lazy;
-use parakeet_rs::{ExecutionConfig as ParakeetExecConfig, ExecutionProvider, ParakeetTDT, Transcriber};
+use parakeet_rs::{
+    ExecutionConfig as ParakeetExecConfig, ExecutionProvider, ParakeetTDT, Transcriber,
+};
 use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::Arc;
@@ -108,7 +110,7 @@ where
     let overlap = OVERLAP_SECONDS * SAMPLE_RATE as usize;
     // Chunked path: stride = chunk_size - overlap so adjacent chunks share tail/head context.
     let stride = chunk_size - overlap;
-    let total_starts: usize = (total_samples - overlap + stride - 1) / stride;
+    let total_starts: usize = (total_samples - overlap).div_ceil(stride);
     let mut texts: Vec<String> = Vec::with_capacity(total_starts);
     let mut tail: Vec<f32> = Vec::with_capacity(overlap);
     let mut samples_read = 0usize;

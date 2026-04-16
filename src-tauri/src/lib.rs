@@ -29,18 +29,16 @@ struct EnqueueResult {
     id: String,
 }
 
-const SUPPORTED_ENGINES: [&str; 4] = [
-    "parakeet",
-    "qwen-0.6b",
-    "qwen-1.7b",
-    "whisper",
-];
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineStatus {
+    available: bool,
+    model_ready: bool,
+    unavailable_reason: Option<String>,
+}
 
 #[tauri::command]
-async fn enqueue_file(
-    path: String,
-    state: State<'_, AppState>,
-) -> Result<EnqueueResult, String> {
+async fn enqueue_file(path: String, state: State<'_, AppState>) -> Result<EnqueueResult, String> {
     let p = PathBuf::from(&path);
     if !p.exists() {
         return Err(format!("Файл не найден: {path}"));
@@ -48,6 +46,7 @@ async fn enqueue_file(
     if !source::is_supported_file(&p) {
         return Err("Неподдерживаемый формат файла".into());
     }
+    let settings = settings::load(&state.queue.app_handle());
     let id = queue::new_job_id();
     let display_name = p
         .file_name()
@@ -59,6 +58,9 @@ async fn enqueue_file(
             id: id.clone(),
             source: SourceKind::LocalFile(p),
             display_name,
+            engine: settings.engine,
+            language: settings.language,
+            save_dir: settings.save_dir,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -66,14 +68,12 @@ async fn enqueue_file(
 }
 
 #[tauri::command]
-async fn enqueue_youtube(
-    url: String,
-    state: State<'_, AppState>,
-) -> Result<EnqueueResult, String> {
+async fn enqueue_youtube(url: String, state: State<'_, AppState>) -> Result<EnqueueResult, String> {
     let trimmed = url.trim().to_string();
     if !source::is_youtube_url(&trimmed) {
         return Err("URL не похож на YouTube-ссылку".into());
     }
+    let settings = settings::load(&state.queue.app_handle());
     let id = queue::new_job_id();
     state
         .queue
@@ -81,6 +81,9 @@ async fn enqueue_youtube(
             id: id.clone(),
             source: SourceKind::YouTube(trimmed.clone()),
             display_name: trimmed,
+            engine: settings.engine,
+            language: settings.language,
+            save_dir: settings.save_dir,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -95,11 +98,13 @@ fn get_settings(app: AppHandle) -> Settings {
 #[tauri::command]
 fn set_settings(app: AppHandle, new: Settings) -> Result<(), String> {
     let old = settings::load(&app);
-    settings::save(&app, &new).map_err(|e| e.to_string()).map(|_| {
-        if old.engine != new.engine {
-            preload_active_engine(app);
-        }
-    })
+    settings::save(&app, &new)
+        .map_err(|e| e.to_string())
+        .map(|_| {
+            if old.engine != new.engine {
+                preload_active_engine(app);
+            }
+        })
 }
 
 /// Whether the model for the currently-selected engine is downloaded and ready.
@@ -110,11 +115,27 @@ fn is_model_ready(app: AppHandle) -> bool {
 }
 
 #[tauri::command]
-fn get_model_statuses(app: AppHandle) -> HashMap<String, bool> {
-    SUPPORTED_ENGINES
+fn get_engine_statuses(app: AppHandle) -> HashMap<String, EngineStatus> {
+    settings::SUPPORTED_ENGINES
         .into_iter()
-        .map(|engine| (engine.to_string(), is_model_ready_for_engine(&app, engine)))
+        .map(|engine| (engine.to_string(), engine_status(&app, engine)))
         .collect()
+}
+
+fn engine_status(app: &AppHandle, engine: &str) -> EngineStatus {
+    let unavailable_reason = engine_unavailable_reason(app, engine);
+    EngineStatus {
+        available: unavailable_reason.is_none(),
+        model_ready: unavailable_reason.is_none() && is_model_ready_for_engine(app, engine),
+        unavailable_reason,
+    }
+}
+
+fn engine_unavailable_reason(_app: &AppHandle, engine: &str) -> Option<String> {
+    if transcriber_qwen::is_qwen_engine(engine) {
+        return transcriber_qwen::unavailable_reason();
+    }
+    None
 }
 
 fn is_model_ready_for_engine(app: &AppHandle, engine: &str) -> bool {
@@ -181,8 +202,7 @@ async fn download_model_inner(app: AppHandle, engine: &str) -> Result<(), String
                     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
                     let size = dir_size_bytes(&cache_dir);
                     if size >= warmup_threshold {
-                        let started = warmup_started
-                            .get_or_insert_with(std::time::Instant::now);
+                        let started = warmup_started.get_or_insert_with(std::time::Instant::now);
                         if stage_emitted != "warmup" {
                             let _ = poll_app.emit("model:stage", "warmup");
                             stage_emitted = "warmup";
@@ -192,8 +212,8 @@ async fn download_model_inner(app: AppHandle, engine: &str) -> Result<(), String
                         let pct = (95.0 + (elapsed / 20.0).min(1.0) * 4.0) as u32;
                         let _ = poll_app.emit("model:progress", pct);
                     } else {
-                        let pct = ((size as f64 / expected_bytes as f64) * 95.0)
-                            .clamp(1.0, 95.0) as u32;
+                        let pct =
+                            ((size as f64 / expected_bytes as f64) * 95.0).clamp(1.0, 95.0) as u32;
                         let _ = poll_app.emit("model:progress", pct);
                     }
                 }
@@ -273,11 +293,6 @@ fn remove_path_if_exists(path: &Path) -> std::io::Result<()> {
 #[tauri::command]
 fn cancel_job(id: String, state: State<'_, AppState>) -> bool {
     state.queue.cancel_registry().cancel(&id)
-}
-
-#[tauri::command]
-fn read_text_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -380,9 +395,6 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
@@ -433,13 +445,12 @@ pub fn run() {
             get_settings,
             set_settings,
             is_model_ready,
-            get_model_statuses,
+            get_engine_statuses,
             download_model,
             download_model_for_engine,
             delete_model,
             delete_model_for_engine,
             cancel_job,
-            read_text_file,
             open_in_finder,
             open_logs,
         ])

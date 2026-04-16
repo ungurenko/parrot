@@ -2,13 +2,13 @@ use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
 use reqwest::header::{CONTENT_RANGE, RANGE};
 use reqwest::StatusCode;
+use serde::Serialize;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use serde::Serialize;
 
 #[derive(Clone, Serialize)]
 struct ModelProgressDetail {
@@ -23,27 +23,26 @@ const WHISPER_MAIN_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
 const WHISPER_COREML_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-encoder.mlmodelc.zip";
+const WHISPER_MAIN_MIN_BYTES: u64 = 100 * 1024 * 1024;
 
 // Parakeet v3 ONNX model URLs (istupakov/parakeet-tdt-0.6b-v3-onnx)
 const PARAKEET_BASE: &str =
     "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
 
-pub async fn download_whisper(
-    app: AppHandle,
-    main_dest: &Path,
-    coreml_dest: &Path,
-) -> Result<()> {
+pub async fn download_whisper(app: AppHandle, main_dest: &Path, coreml_dest: &Path) -> Result<()> {
     if let Some(parent) = main_dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    if !main_dest.exists() {
+    if !file_len_at_least(main_dest, WHISPER_MAIN_MIN_BYTES) {
+        let _ = tokio::fs::remove_file(main_dest).await;
         download_with_progress(&app, WHISPER_MAIN_URL, main_dest, 0, 80).await?;
     } else {
         let _ = app.emit("model:progress", 80u32);
     }
 
-    if !coreml_dest.exists() {
+    if !dir_has_content(coreml_dest) {
+        let _ = tokio::fs::remove_dir_all(coreml_dest).await;
         let models_dir = coreml_dest
             .parent()
             .ok_or_else(|| anyhow!("no parent for coreml path"))?;
@@ -76,18 +75,19 @@ pub async fn download_parakeet(app: AppHandle, dir: &Path) -> Result<()> {
 
     // Download int8 variant — ~3× smaller than fp32 and ~2× faster inference.
     // parakeet-rs auto-discovers these filenames alongside the fp32 variant.
-    let files: [(&str, u32, u32); 3] = [
-        ("vocab.txt", 0, 1),
-        ("decoder_joint-model.int8.onnx", 1, 5),
-        ("encoder-model.int8.onnx", 5, 100),
+    let files: [(&str, u64, u32, u32); 3] = [
+        ("vocab.txt", 100, 0, 1),
+        ("decoder_joint-model.int8.onnx", 1024 * 1024, 1, 5),
+        ("encoder-model.int8.onnx", 100 * 1024 * 1024, 5, 100),
     ];
 
-    for (name, start, end) in files {
+    for (name, min_bytes, start, end) in files {
         let dest = dir.join(name);
-        if dest.exists() {
+        if file_len_at_least(&dest, min_bytes) {
             let _ = app.emit("model:progress", end);
             continue;
         }
+        let _ = tokio::fs::remove_file(&dest).await;
         let url = format!("{PARAKEET_BASE}/{name}");
         download_with_progress(&app, &url, &dest, start, end).await?;
     }
@@ -150,13 +150,7 @@ async fn download_with_progress(
         .checked_sub(Duration::from_secs(2))
         .unwrap_or_else(Instant::now);
 
-    emit_download_progress(
-        app,
-        percent_start,
-        downloaded,
-        total,
-        0,
-    );
+    emit_download_progress(app, percent_start, downloaded, total, 0);
 
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| anyhow!(e))?;
@@ -204,4 +198,48 @@ fn emit_download_progress(
 
 fn parse_content_range_total(value: &str) -> Option<u64> {
     value.rsplit('/').next()?.parse().ok()
+}
+
+fn file_len_at_least(path: &Path, min_bytes: u64) -> bool {
+    path.metadata()
+        .map(|meta| meta.is_file() && meta.len() >= min_bytes)
+        .unwrap_or(false)
+}
+
+fn dir_has_content(path: &Path) -> bool {
+    path.is_dir()
+        && std::fs::read_dir(path)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("parrot-model-test-{}-{}", name, std::process::id()))
+    }
+
+    #[test]
+    fn file_len_at_least_should_reject_empty_files() {
+        let path = temp_path("empty-file");
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, []).expect("write empty file");
+
+        assert!(!file_len_at_least(&path, 1));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn dir_has_content_should_reject_empty_dirs() {
+        let path = temp_path("empty-dir");
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temp dir");
+
+        assert!(!dir_has_content(&path));
+
+        let _ = std::fs::remove_dir_all(&path);
+    }
 }
