@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import parrotImg from "/parrot.png";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -126,11 +127,15 @@ export function Onboarding({ onDone }: Props) {
   };
 
   return (
-    <main className="fixed inset-0 flex items-center justify-center overflow-y-auto bg-background p-6">
-      <Card className="w-full max-w-lg border bg-card shadow-none">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-2xl">
-            <span aria-hidden="true">🦜</span>
+    <main className="app-shell fixed inset-0 flex items-center justify-center overflow-y-auto p-6">
+      <Card className="glass-modal w-full max-w-lg border-0 p-0 shadow-none">
+        <CardHeader className="p-6 pb-4">
+          <CardTitle className="flex items-center gap-3 text-2xl">
+            <span
+              className="parrot-mini-lg"
+              style={{ backgroundImage: `url(${parrotImg})` }}
+              aria-hidden="true"
+            />
             Parrot
           </CardTitle>
           <CardDescription>
@@ -138,7 +143,7 @@ export function Onboarding({ onDone }: Props) {
           </CardDescription>
         </CardHeader>
 
-        <CardContent>
+        <CardContent className="px-6 pb-6">
           {error && step !== "model" && (
             <Alert variant="destructive" className="mb-4">
               <AlertDescription className="whitespace-pre-wrap">
@@ -248,7 +253,7 @@ export function Onboarding({ onDone }: Props) {
           )}
         </CardContent>
 
-        <CardFooter className="justify-end gap-2 bg-muted/30">
+        <CardFooter className="justify-end gap-2 bg-white/55 rounded-b-[inherit] px-6 py-4">
           {step === "folder" && settings && (
             <Button onClick={() => setStep("engine")}>Далее</Button>
           )}

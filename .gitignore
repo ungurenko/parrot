@@ -14,6 +14,7 @@ dist-ssr
 .qwen-mlx/
 qwen-results/
 .superpowers/
+.playwright-cli/
 
 # Editor directories and files
 .vscode/*

@@ -101,10 +101,9 @@ export function EnginePicker({
           <div
             key={opt.id}
             className={cn(
-              "flex min-w-0 flex-col gap-2 rounded-lg border p-3 transition-colors",
-              active
-                ? "border-border bg-background"
-                : "border-transparent bg-muted/25 hover:bg-muted/40",
+              "engine-card flex min-w-0 flex-col gap-2",
+              active && "selected",
+              !available && "unavailable",
             )}
           >
             <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
@@ -120,7 +119,7 @@ export function EnginePicker({
                     "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border text-xs",
                     active
                       ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-background text-muted-foreground",
+                      : "border-white/70 bg-white/46 text-muted-foreground",
                   )}
                   aria-hidden="true"
                 >
@@ -146,16 +145,17 @@ export function EnginePicker({
 
               <div className="flex shrink-0 items-center gap-2 self-start sm:self-auto">
                 {showModelStatus && (
-                  <Badge
-                    variant={ready ? "default" : "secondary"}
+                  <span
+                    className={cn("status-chip", ready && "ready")}
                     title={
                       ready
                         ? "Модель уже скачана на компьютер"
                         : "Модель еще не скачана на компьютер"
                     }
                   >
+                    <span className="dot" aria-hidden="true" />
                     {ready ? "Скачана" : "Не скачана"}
-                  </Badge>
+                  </span>
                 )}
 
                 {!ready && onPrepare && available && (

@@ -1,17 +1,47 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { DropZone } from "./components/DropZone";
-import { YouTubeInput } from "./components/YouTubeInput";
-import { JobList } from "./components/JobList";
+import parrotImg from "/parrot.png";
+import { EmptyState } from "./components/EmptyState";
+import { ProcessingView } from "./components/ProcessingView";
 import { ResultView } from "./components/ResultView";
+import { JobList } from "./components/JobList";
 import { SettingsModal } from "./components/SettingsModal";
 import { Onboarding } from "./components/Onboarding";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Toaster } from "@/components/ui/sonner";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useJobEvents } from "./hooks/useJobEvents";
 import { ENGINE_LABEL, type Job, type Settings } from "./types";
+
+type ViewState =
+  | { kind: "empty" }
+  | { kind: "processing"; job: Job }
+  | { kind: "result"; job: Job };
+
+function pickView(jobs: Job[], selectedId: string | null): ViewState {
+  const selected = selectedId ? jobs.find((j) => j.id === selectedId) : null;
+
+  if (selected) {
+    if (
+      selected.status === "running" ||
+      selected.status === "queued" ||
+      selected.status === "canceling"
+    ) {
+      return { kind: "processing", job: selected };
+    }
+    return { kind: "result", job: selected };
+  }
+
+  const active = jobs.find(
+    (j) =>
+      j.status === "running" ||
+      j.status === "queued" ||
+      j.status === "canceling",
+  );
+  if (active) return { kind: "processing", job: active };
+
+  return { kind: "empty" };
+}
 
 function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -34,7 +64,10 @@ function App() {
     })();
   }, [reloadSettings]);
 
-  useJobEvents(setJobs, useCallback((j: Job) => setSelectedId(j.id), []));
+  useJobEvents(
+    setJobs,
+    useCallback((j: Job) => setSelectedId(j.id), []),
+  );
 
   const markCanceling = useCallback((id: string) => {
     setJobs((current) =>
@@ -52,9 +85,7 @@ function App() {
         await invoke("enqueue_file", { path: p });
       } catch (e) {
         console.error("enqueue_file failed:", e);
-        toast.error("Не удалось добавить файл", {
-          description: String(e),
-        });
+        toast.error("Не удалось добавить файл", { description: String(e) });
       }
     }
   }, []);
@@ -63,16 +94,13 @@ function App() {
     try {
       await invoke("enqueue_youtube", { url });
     } catch (e) {
-      toast.error("Не удалось добавить YouTube", {
-        description: String(e),
-      });
+      toast.error("Не удалось добавить YouTube", { description: String(e) });
     }
   }, []);
 
-  const selected = useMemo(
-    () => jobs.find((j) => j.id === selectedId) ?? null,
-    [jobs, selectedId],
-  );
+  const view = useMemo(() => pickView(jobs, selectedId), [jobs, selectedId]);
+
+  const resetToEmpty = useCallback(() => setSelectedId(null), []);
 
   if (needsOnboarding === null) return null;
   if (needsOnboarding) {
@@ -84,68 +112,91 @@ function App() {
     );
   }
 
+  const engineLabel = settings ? ENGINE_LABEL[settings.engine] : undefined;
+  const showQueue = jobs.length > 1;
+
   return (
-    <main className="flex h-full flex-col bg-background text-foreground">
-      <header className="flex h-12 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-xl">
-        <div className="flex items-center gap-2">
-          <span className="text-xl" aria-hidden="true">
-            🦜
-          </span>
-          <h1 className="font-heading text-sm font-semibold">Parrot</h1>
+    <main className="app-shell flex h-full flex-col">
+      <header
+        data-tauri-drag-region
+        className="glass-toolbar flex h-[48px] items-center justify-between gap-3 px-4 pl-20"
+      >
+        <div data-tauri-drag-region className="flex items-center gap-2">
+          <span
+            className="parrot-mini"
+            style={{ backgroundImage: `url(${parrotImg})` }}
+            aria-hidden="true"
+          />
+          <h1 className="glass-title text-[13px]">Parrot</h1>
         </div>
         <div className="flex items-center gap-2">
           {settings && (
-            <Button
-              variant="ghost"
-              size="sm"
+            <button
+              type="button"
+              className="pill"
               onClick={() => setSettingsOpen(true)}
               title="Нажмите, чтобы сменить движок"
-              className="h-7 max-w-64 text-muted-foreground"
             >
-              <span aria-hidden="true">🤖</span>
-              <span className="truncate">{ENGINE_LABEL[settings.engine]}</span>
-            </Button>
+              <span className="led" />
+              <span className="truncate">{engineLabel}</span>
+            </button>
           )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
+          <button
+            type="button"
+            className="icon-btn"
             onClick={() => setSettingsOpen(true)}
             title="Настройки"
-            className="text-muted-foreground"
+            aria-label="Настройки"
           >
-            <span aria-hidden="true">⚙️</span>
-            <span className="sr-only">Настройки</span>
-          </Button>
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(320px,390px)] bg-background">
-        <section className="flex min-h-0 flex-col gap-3 p-4">
-          <DropZone onFiles={handleFiles} />
-          <YouTubeInput onSubmit={handleYouTube} />
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="mb-2 text-xs font-medium text-muted-foreground">
-              Результат
-            </div>
-            <div className="min-h-0 flex-1">
-              <ResultView job={selected} />
-            </div>
-          </div>
+      <div
+        className={`grid min-h-0 flex-1 gap-4 p-4 ${showQueue ? "queue-grid" : ""}`}
+      >
+        <section className="flex min-h-0 flex-col">
+          {view.kind === "empty" && (
+            <EmptyState onFiles={handleFiles} onYouTube={handleYouTube} />
+          )}
+          {view.kind === "processing" && (
+            <ProcessingView job={view.job} onCancel={markCanceling} />
+          )}
+          {view.kind === "result" && (
+            <ResultView
+              job={view.job}
+              onReset={resetToEmpty}
+              engineLabel={engineLabel}
+            />
+          )}
         </section>
 
-        <aside className="flex min-h-0 flex-col border-l bg-muted/35 p-4">
-          <div className="mb-2 text-xs font-medium text-muted-foreground">
-            Очередь
-          </div>
-          <ScrollArea className="-mr-2 min-h-0 flex-1 pr-2">
-            <JobList
-              jobs={jobs}
-              onSelect={(j) => setSelectedId(j.id)}
-              onCancel={markCanceling}
-              selectedId={selectedId}
-            />
-          </ScrollArea>
-        </aside>
+        {showQueue && (
+          <aside className="flex min-h-0 flex-col gap-2">
+            <div className="glass-label px-1">Очередь</div>
+            <ScrollArea className="-mr-2 min-h-0 flex-1 pr-2">
+              <JobList
+                jobs={jobs}
+                onSelect={(j) => setSelectedId(j.id)}
+                onCancel={markCanceling}
+                selectedId={selectedId}
+              />
+            </ScrollArea>
+          </aside>
+        )}
       </div>
 
       {settingsOpen && (

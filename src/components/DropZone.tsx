@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { Card, CardContent } from "@/components/ui/card";
+import parrotImg from "/parrot.png";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
 
 const AUDIO_EXTS = ["mp3", "wav", "m4a", "flac", "ogg", "opus", "aac", "wma"];
 const VIDEO_EXTS = ["mp4", "mov", "mkv", "avi", "webm", "m4v"];
+const CHIP_FORMATS = ["MP3", "MP4", "MOV", "M4A", "FLAC", "WAV", "WEBM"];
 
 export function DropZone({ onFiles }: Props) {
   const [hovering, setHovering] = useState(false);
@@ -54,7 +55,7 @@ export function DropZone({ onFiles }: Props) {
   }, [onFiles]);
 
   return (
-    <Card
+    <div
       role="button"
       tabIndex={0}
       onClick={pickFiles}
@@ -64,22 +65,39 @@ export function DropZone({ onFiles }: Props) {
           pickFiles();
         }
       }}
-      className={cn(
-        "h-36 cursor-pointer border border-dashed bg-muted/25 shadow-none transition-colors",
-        hovering
-          ? "border-primary bg-background ring-2 ring-primary/10"
-          : "border-border hover:bg-background",
-      )}
+      className={cn("hero-drop", hovering && "drag")}
     >
-      <CardContent className="flex h-full flex-col items-center justify-center px-4 text-center">
-        <div className="mb-2 text-3xl" aria-hidden="true">
-          🎙️
+      <div
+        className="parrot-hero"
+        style={{ backgroundImage: `url(${parrotImg})` }}
+        aria-hidden="true"
+      />
+
+      <div className="hero-text">
+        <h1>Перетащите файл — и попугай перескажет.</h1>
+        <p>
+          Локальная транскрипция аудио и видео на вашем Mac. Без сети, без
+          облаков, без подписки.
+        </p>
+        <div className="format-chips">
+          {CHIP_FORMATS.map((f) => (
+            <span key={f} className="chip">
+              {f}
+            </span>
+          ))}
         </div>
-        <div className="text-base font-medium">Перетащите файл сюда</div>
-        <div className="mt-1 text-sm text-muted-foreground">
-          или нажмите, чтобы выбрать — mp3, mp4, mov, m4a, flac, …
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+
+      <button
+        type="button"
+        className="choose-btn"
+        onClick={(e) => {
+          e.stopPropagation();
+          pickFiles();
+        }}
+      >
+        выбрать файл…
+      </button>
+    </div>
   );
 }

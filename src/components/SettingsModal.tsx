@@ -164,8 +164,8 @@ export function SettingsModal({ onClose }: Props) {
         if (!openState) onClose();
       }}
     >
-      <DialogContent className="flex max-h-[85vh] min-h-0 w-[min(620px,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
-        <DialogHeader className="min-w-0 shrink-0 border-b bg-background/80 p-5 pr-12">
+      <DialogContent className="glass-modal flex max-h-[85vh] min-h-0 w-[min(620px,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+        <DialogHeader className="modal-band-top min-w-0 shrink-0 p-5 pr-12">
           <DialogTitle>⚙️ Настройки</DialogTitle>
           <DialogDescription>
             Движок, папка сохранения и обновления приложения.
@@ -195,7 +195,7 @@ export function SettingsModal({ onClose }: Props) {
               id="language"
               value={settings.language}
               onChange={(e) => changeLanguage(e.target.value as TranscriptLanguage)}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              className="h-10 w-full rounded-lg border border-white/70 bg-white/55 px-3 text-sm text-[color:var(--ink)] shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] outline-none transition-all duration-200 focus-visible:border-[color:var(--parrot-accent)] focus-visible:bg-white/85 focus-visible:ring-3 focus-visible:ring-[color:rgba(255,122,89,0.28)]"
             >
               {Object.entries(LANGUAGE_LABEL).map(([value, label]) => (
                 <option key={value} value={value}>
@@ -220,7 +220,7 @@ export function SettingsModal({ onClose }: Props) {
                 id="save-dir"
                 readOnly
                 value={settings.save_dir}
-                className="min-w-0 truncate bg-background"
+                className="glass-input min-w-0 truncate"
               />
               <Button
                 type="button"
@@ -234,9 +234,9 @@ export function SettingsModal({ onClose }: Props) {
           </Field>
         </FieldGroup>
 
-        <Separator />
+        <Separator className="bg-white/50" />
 
-        <div className="flex min-w-0 shrink-0 flex-col gap-3 bg-muted/30 p-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        <div className="modal-band-bottom flex min-w-0 shrink-0 flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
           <div className="flex min-w-0 flex-col items-start gap-1">
             <Button
               type="button"
