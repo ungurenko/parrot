@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
 use crate::cancellation::{CancelRegistry, CancelToken};
+use crate::history::{self, HistoryEntry};
 use crate::{paths, source, transcriber, transcriber_parakeet, transcriber_qwen, writer};
 
 const CANCELLED_MESSAGE: &str = "Отменено пользователем";
@@ -260,12 +261,27 @@ async fn handle_prepared_outcome(
             }
             match transcribe_prepared(app, prepared, token.clone()).await {
                 Ok((text, out)) => {
+                    let output_path_str = out.to_string_lossy().to_string();
+                    let entry = HistoryEntry {
+                        id: job.id.clone(),
+                        source_name: job.display_name.clone(),
+                        engine: job.engine.clone(),
+                        language: job.language.clone(),
+                        created_at: history::now_iso8601(),
+                        output_path: output_path_str.clone(),
+                        summary_path: None,
+                    };
+                    if let Err(e) = history::append(app, entry) {
+                        tracing::warn!("history append failed for job {}: {e:#}", job.id);
+                    } else {
+                        let _ = app.emit("history:updated", ());
+                    }
                     let _ = app.emit(
                         "job:done",
                         JobDoneEvent {
                             id: job.id.clone(),
                             text,
-                            output_path: out.to_string_lossy().to_string(),
+                            output_path: output_path_str,
                         },
                     );
                     cancel.remove(&job.id);

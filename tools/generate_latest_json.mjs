@@ -26,7 +26,7 @@ if (signatureStat.mtimeMs + 1000 < archiveStat.mtimeMs) {
 
 const latest = {
   version,
-  notes: "Исправлена транскрибация YouTube-ссылок (ошибка подписи yt-dlp под hardened runtime).",
+  notes: "Добавлен локальный LLM-конспект на базе Qwen 3-4B Instruct MLX (оффлайн, ~2.3 ГБ). Новая секция «История» на главной: все прошлые транскрипции в один клик, сохраняются между сеансами. Увеличен шрифт для читаемости, усилена отмена фоновых процессов при закрытии окна.",
   pub_date: new Date().toISOString(),
   platforms: {
     "darwin-aarch64": {

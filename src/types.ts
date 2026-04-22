@@ -2,6 +2,9 @@ export type JobStatus = "queued" | "running" | "canceling" | "canceled" | "done"
 
 export type JobStage = "preparing" | "extracting" | "downloading" | "transcribing" | null;
 
+export type SummaryStatus = "idle" | "generating" | "done" | "error";
+export type SummaryStage = "loading" | "generating" | "finalizing";
+
 export interface Job {
   id: string;
   sourceName: string;
@@ -11,6 +14,12 @@ export interface Job {
   text?: string;
   outputPath?: string;
   error?: string;
+  summaryStatus?: SummaryStatus;
+  summaryStage?: SummaryStage;
+  summaryPercent?: number;
+  summary?: string;
+  summaryPath?: string;
+  summaryError?: string;
 }
 
 export type Engine = "parakeet" | "whisper" | "qwen-0.6b" | "qwen-1.7b";
@@ -76,4 +85,30 @@ export interface Settings {
   onboarded: boolean;
   engine: Engine;
   language: TranscriptLanguage;
+  summarizer_enabled: boolean;
+}
+
+export interface SummarizerStatus {
+  available: boolean;
+  modelReady: boolean;
+  unavailableReason?: string | null;
+}
+
+export const SUMMARIZER_MODEL_LABEL = "Qwen 3-4B Instruct (конспект)";
+export const SUMMARIZER_MODEL_SIZE = "~2.3 ГБ";
+
+export interface HistoryEntry {
+  id: string;
+  sourceName: string;
+  engine: string;
+  language: string;
+  createdAt: string;
+  outputPath: string;
+  summaryPath?: string;
+}
+
+export interface LoadedHistoryEntry {
+  entry: HistoryEntry;
+  text: string;
+  summary?: string;
 }

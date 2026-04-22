@@ -1,10 +1,13 @@
 mod binaries;
 mod cancellation;
+mod history;
 mod model;
 mod paths;
+mod prompts;
 mod queue;
 mod settings;
 mod source;
+mod summarizer_qwen3;
 mod transcriber;
 mod transcriber_parakeet;
 mod transcriber_qwen;
@@ -17,11 +20,42 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use cancellation::CancelRegistry;
 use queue::{Job, JobQueue, SourceKind};
 use settings::Settings;
 
 pub struct AppState {
     queue: Arc<JobQueue>,
+    summary_cancel: CancelRegistry,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SummaryProgressEvent {
+    id: String,
+    percent: u32,
+    stage: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SummaryDoneEvent {
+    id: String,
+    markdown: String,
+    output_path: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SummaryErrorEvent {
+    id: String,
+    message: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SummaryCanceledEvent {
+    id: String,
 }
 
 #[derive(Serialize)]
@@ -296,6 +330,262 @@ fn cancel_job(id: String, state: State<'_, AppState>) -> bool {
 }
 
 #[tauri::command]
+fn get_history(app: AppHandle) -> Vec<history::HistoryEntry> {
+    history::load(&app)
+}
+
+#[tauri::command]
+fn delete_history_entry(id: String, app: AppHandle) -> Result<(), String> {
+    history::remove(&app, &id).map_err(|e| e.to_string())?;
+    let _ = app.emit("history:updated", ());
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoadedHistoryEntry {
+    entry: history::HistoryEntry,
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+}
+
+#[tauri::command]
+fn load_history_entry(id: String, app: AppHandle) -> Result<LoadedHistoryEntry, String> {
+    let entry = history::get(&app, &id).ok_or_else(|| "Запись не найдена".to_string())?;
+    let text = std::fs::read_to_string(&entry.output_path)
+        .map_err(|e| format!("Не удалось прочитать транскрипт: {e}"))?;
+    let summary = entry
+        .summary_path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    Ok(LoadedHistoryEntry {
+        entry,
+        text,
+        summary,
+    })
+}
+
+#[tauri::command]
+fn get_summarizer_status(app: AppHandle) -> summarizer_qwen3::SummarizerStatus {
+    summarizer_qwen3::status(&app)
+}
+
+#[tauri::command]
+async fn download_summarizer_model(app: AppHandle) -> Result<(), String> {
+    let _ = app.emit("summary_model:progress", 1u32);
+    let _ = app.emit("summary_model:stage", "downloading");
+
+    let expected_bytes = summarizer_qwen3::EXPECTED_SUMMARY_BYTES;
+    let cache_dir = paths::qwen_cache_dir(&app).map_err(|e| e.to_string())?;
+    let poll_app = app.clone();
+    let poll_handle = tauri::async_runtime::spawn(async move {
+        let warmup_threshold = (expected_bytes as f64 * 0.9) as u64;
+        let mut warmup_started: Option<std::time::Instant> = None;
+        let mut stage_emitted = "downloading";
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            let size = dir_size_bytes(&cache_dir);
+            if size >= warmup_threshold {
+                let started = warmup_started.get_or_insert_with(std::time::Instant::now);
+                if stage_emitted != "warmup" {
+                    let _ = poll_app.emit("summary_model:stage", "warmup");
+                    stage_emitted = "warmup";
+                }
+                let elapsed = started.elapsed().as_secs_f64();
+                let pct = (95.0 + (elapsed / 20.0).min(1.0) * 4.0) as u32;
+                let _ = poll_app.emit("summary_model:progress", pct);
+            } else {
+                let pct = ((size as f64 / expected_bytes as f64) * 95.0).clamp(1.0, 95.0) as u32;
+                let _ = poll_app.emit("summary_model:progress", pct);
+            }
+        }
+    });
+
+    let app_for_task = app.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || summarizer_qwen3::warmup_model(&app_for_task))
+            .await;
+    poll_handle.abort();
+    result
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("summary_model:stage", "ready");
+    let _ = app.emit("summary_model:progress", 100u32);
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_summarizer_model(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || summarizer_qwen3::delete_model(&app))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn cancel_summary(id: String, state: State<'_, AppState>) -> bool {
+    state.summary_cancel.cancel(&id)
+}
+
+#[tauri::command]
+async fn summarize(
+    id: String,
+    transcript: String,
+    transcript_path: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if transcript.trim().is_empty() {
+        return Err("Пустой транскрипт.".to_string());
+    }
+    if !summarizer_qwen3::is_ready(&app) {
+        return Err("Модель конспекта не готова. Откройте настройки и подготовьте её.".to_string());
+    }
+
+    // Validate transcript_path: must be a .txt file inside save_dir (hardening
+    // against a frontend or IPC caller pointing at an arbitrary filesystem path).
+    let transcript_path_buf = PathBuf::from(&transcript_path);
+    if transcript_path_buf
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.eq_ignore_ascii_case("txt"))
+        != Some(true)
+    {
+        return Err("Путь транскрипта должен указывать на .txt".to_string());
+    }
+    let save_dir = settings::load(&app).save_dir;
+    let canonical_save = save_dir.canonicalize().unwrap_or(save_dir);
+    let canonical_transcript = transcript_path_buf
+        .canonicalize()
+        .map_err(|e| format!("Файл транскрипта недоступен: {e}"))?;
+    if !canonical_transcript.starts_with(&canonical_save) {
+        return Err("Транскрипт должен находиться в папке сохранения".to_string());
+    }
+
+    // Atomic create: refuses to start a second concurrent summarize for the same
+    // job id (protects against UI races where a previous run is still winding down).
+    let token = state
+        .summary_cancel
+        .try_create(&id)
+        .ok_or_else(|| "Конспект для этой записи уже генерируется".to_string())?;
+    let cancel_registry = state.summary_cancel.clone();
+
+    let transcript_path_buf = canonical_transcript;
+    let id_for_task = id.clone();
+    let id_for_progress = id.clone();
+    let app_for_task = app.clone();
+    let app_for_progress = app.clone();
+    let transcript_len = transcript.chars().count();
+
+    // Progress ticker: 0→95 over estimated duration.
+    // Rough heuristic: 4s model load + (expected output tokens / 60 tok/s).
+    let expected_output_tokens = ((transcript_len as f64) / 40.0).clamp(200.0, 2000.0);
+    let expected_seconds = 4.0 + expected_output_tokens / 60.0;
+    let ticker_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ticker_flag = ticker_stop.clone();
+    let ticker_handle = tauri::async_runtime::spawn(async move {
+        let started = std::time::Instant::now();
+        loop {
+            if ticker_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            let elapsed = started.elapsed().as_secs_f64();
+            let stage = if elapsed < 4.0 {
+                "loading"
+            } else {
+                "generating"
+            };
+            let ratio = (elapsed / expected_seconds).min(1.0);
+            let pct = (ratio * 95.0).round() as u32;
+            let _ = app_for_progress.emit(
+                "summary:progress",
+                SummaryProgressEvent {
+                    id: id_for_progress.clone(),
+                    percent: pct.max(2),
+                    stage: stage.to_string(),
+                },
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        }
+    });
+
+    let transcript_owned = transcript.clone();
+    let token_for_task = token.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<(String, PathBuf)> {
+            let summary = summarizer_qwen3::generate_summary(
+                &app_for_task,
+                &transcript_owned,
+                token_for_task,
+            )?;
+            let output = writer::save_summary(&transcript_path_buf, &summary)?;
+            Ok((summary, output))
+        })
+        .await;
+
+    ticker_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    ticker_handle.abort();
+    cancel_registry.remove(&id_for_task);
+
+    match result {
+        Ok(Ok((markdown, output))) => {
+            if let Err(e) = history::attach_summary(&app, &id_for_task, &output) {
+                tracing::warn!("history attach_summary failed for {id_for_task}: {e:#}",);
+            } else {
+                let _ = app.emit("history:updated", ());
+            }
+            let _ = app.emit(
+                "summary:progress",
+                SummaryProgressEvent {
+                    id: id_for_task.clone(),
+                    percent: 100,
+                    stage: "finalizing".to_string(),
+                },
+            );
+            let _ = app.emit(
+                "summary:done",
+                SummaryDoneEvent {
+                    id: id_for_task,
+                    markdown,
+                    output_path: output.to_string_lossy().to_string(),
+                },
+            );
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            let msg = format!("{e:#}");
+            if msg == "cancelled" || token.is_cancelled() {
+                let _ = app.emit("summary:canceled", SummaryCanceledEvent { id: id_for_task });
+            } else {
+                tracing::error!("summary {} failed: {msg}", id_for_task);
+                let _ = app.emit(
+                    "summary:error",
+                    SummaryErrorEvent {
+                        id: id_for_task,
+                        message: msg.clone(),
+                    },
+                );
+                return Err(msg);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            tracing::error!("summary {} spawn failed: {msg}", id_for_task);
+            let _ = app.emit(
+                "summary:error",
+                SummaryErrorEvent {
+                    id: id_for_task,
+                    message: msg.clone(),
+                },
+            );
+            Err(msg)
+        }
+    }
+}
+
+#[tauri::command]
 fn open_in_finder(path: String) -> Result<(), String> {
     std::process::Command::new("open")
         .arg("-R")
@@ -402,15 +692,6 @@ pub fn run() {
             if let Err(e) = paths::migrate_legacy_app_data(&handle) {
                 eprintln!("Legacy app data migration failed: {e:#}");
             }
-            if let Some(win) = app.get_webview_window("main") {
-                win.on_window_event(|event| {
-                    if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                        binaries::stop_yt_dlp_startup_cache();
-                        transcriber_qwen::stop_server();
-                    }
-                });
-            }
-
             if let Ok(log_dir) = paths::logs_dir(&handle) {
                 let file_appender = tracing_appender::rolling::daily(log_dir, "app.log");
                 let (nb, guard) = tracing_appender::non_blocking(file_appender);
@@ -431,7 +712,24 @@ pub fn run() {
             let _ = std::fs::create_dir_all(&s.save_dir);
 
             let queue = JobQueue::start(handle.clone());
-            app.manage(AppState { queue });
+            let summary_cancel = CancelRegistry::new();
+            let summary_cancel_for_close = summary_cancel.clone();
+            app.manage(AppState {
+                queue,
+                summary_cancel,
+            });
+
+            if let Some(win) = app.get_webview_window("main") {
+                win.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                        binaries::stop_yt_dlp_startup_cache();
+                        transcriber_qwen::stop_server();
+                        // Kill any running mlx-lm summarization subprocess so we
+                        // don't leave a zombie Python process after window close.
+                        summary_cancel_for_close.cancel_all();
+                    }
+                });
+            }
 
             preload_active_engine(handle.clone());
             binaries::warm_yt_dlp_startup_cache(handle.clone());
@@ -453,6 +751,14 @@ pub fn run() {
             cancel_job,
             open_in_finder,
             open_logs,
+            get_summarizer_status,
+            download_summarizer_model,
+            delete_summarizer_model,
+            summarize,
+            cancel_summary,
+            get_history,
+            delete_history_entry,
+            load_history_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

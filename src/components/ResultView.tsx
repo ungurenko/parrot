@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import {
@@ -10,18 +10,21 @@ import {
 } from "@/components/ui/empty";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ENGINE_LABEL, type Job } from "../types";
+import { SummaryPanel } from "./SummaryPanel";
 
 interface Props {
   job: Job;
   onReset: () => void;
   engineLabel?: string;
+  summarizerEnabled?: boolean;
 }
 
 function formatFileName(name: string): string {
   return name.length > 48 ? `${name.slice(0, 45)}…` : name;
 }
 
-export function ResultView({ job, onReset, engineLabel }: Props) {
+export function ResultView({ job, onReset, engineLabel, summarizerEnabled }: Props) {
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const segments = useMemo(() => {
     if (!job.text) return [] as string[];
     const trimmed = job.text.trim();
@@ -152,78 +155,98 @@ export function ResultView({ job, onReset, engineLabel }: Props) {
         </span>
       </div>
 
-      <div className="doc-card min-h-0 flex-1">
-        <div className="doc-head">
-          <div className="min-w-0">
-            <h2 title={job.sourceName}>{job.sourceName}</h2>
-            <div className="meta-row">
-              <span>
-                <b>{wordCount}</b> слов
-              </span>
-              <span>
-                <b>{charCount}</b> символов
-              </span>
-              <span>
-                <b>{engine}</b>
-              </span>
-            </div>
-          </div>
-          <div className="export-group">
-            <button
-              type="button"
-              className="export-btn txt"
-              onClick={revealInFinder}
-              disabled={!job.outputPath}
-              title="Открыть .txt в Finder"
-            >
-              <span className="dot" />
-              TXT
-            </button>
-            <button
-              type="button"
-              className="export-btn srt"
-              disabled
-              title="Скоро"
-            >
-              <span className="dot" />
-              SRT
-            </button>
-            <button
-              type="button"
-              className="export-btn md"
-              disabled
-              title="Скоро"
-            >
-              <span className="dot" />
-              MD
-            </button>
-            <button type="button" className="export-btn" onClick={copyText}>
-              ⧉ Copy
-            </button>
-            <button
-              type="button"
-              className="export-btn"
-              onClick={revealInFinder}
-              disabled={!job.outputPath}
-            >
-              ↗ Finder
-            </button>
-          </div>
-        </div>
-
-        <div className="segments">
-          {segments.length > 0 ? (
-            segments.map((seg, i) => (
-              <div key={i} className="seg">
-                {seg}
+      <div className="result-scroll min-h-0 flex-1">
+        <div className="doc-card">
+          <div className="doc-head">
+            <div className="min-w-0">
+              <h2 title={job.sourceName}>{job.sourceName}</h2>
+              <div className="meta-row">
+                <span>
+                  <b>{wordCount}</b> слов
+                </span>
+                <span>
+                  <b>{charCount}</b> символов
+                </span>
+                <span>
+                  <b>{engine}</b>
+                </span>
               </div>
-            ))
-          ) : (
-            <div className="seg" style={{ color: "var(--ink-3)" }}>
-              Текст пустой.
             </div>
+            <div className="export-group">
+              <button
+                type="button"
+                className="export-btn txt"
+                onClick={revealInFinder}
+                disabled={!job.outputPath}
+                title="Открыть .txt в Finder"
+              >
+                <span className="dot" />
+                TXT
+              </button>
+              <button
+                type="button"
+                className="export-btn srt"
+                disabled
+                title="Скоро"
+              >
+                <span className="dot" />
+                SRT
+              </button>
+              <button
+                type="button"
+                className="export-btn md"
+                disabled
+                title="Скоро"
+              >
+                <span className="dot" />
+                MD
+              </button>
+              <button type="button" className="export-btn" onClick={copyText}>
+                ⧉ Copy
+              </button>
+              <button
+                type="button"
+                className="export-btn"
+                onClick={revealInFinder}
+                disabled={!job.outputPath}
+              >
+                ↗ Finder
+              </button>
+            </div>
+          </div>
+
+          <div
+            className={`segments ${
+              summarizerEnabled && !transcriptExpanded ? "segments-collapsed" : ""
+            }`}
+          >
+            {segments.length > 0 ? (
+              segments.map((seg, i) => (
+                <div key={i} className="seg">
+                  {seg}
+                </div>
+              ))
+            ) : (
+              <div className="seg" style={{ color: "var(--ink-3)" }}>
+                Текст пустой.
+              </div>
+            )}
+          </div>
+
+          {summarizerEnabled && segments.length > 0 && (
+            <button
+              type="button"
+              className="transcript-toggle"
+              onClick={() => setTranscriptExpanded((v) => !v)}
+            >
+              {transcriptExpanded
+                ? "Свернуть транскрипт ▲"
+                : "Развернуть транскрипт ▼"}
+            </button>
           )}
         </div>
+
+        {summarizerEnabled && <SummaryPanel job={job} />}
       </div>
     </div>
   );

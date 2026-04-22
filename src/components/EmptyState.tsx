@@ -1,12 +1,23 @@
 import { DropZone } from "./DropZone";
 import { YouTubeInput } from "./YouTubeInput";
+import { HistoryList } from "./HistoryList";
+import type { HistoryEntry } from "../types";
 
 interface Props {
   onFiles: (paths: string[]) => void;
   onYouTube: (url: string) => void;
+  historyEntries?: HistoryEntry[];
+  onOpenHistory?: (id: string) => void;
+  onDeleteHistory?: (id: string) => void;
 }
 
-export function EmptyState({ onFiles, onYouTube }: Props) {
+export function EmptyState({
+  onFiles,
+  onYouTube,
+  historyEntries = [],
+  onOpenHistory,
+  onDeleteHistory,
+}: Props) {
   return (
     <div className="flex flex-col gap-5">
       <DropZone onFiles={onFiles} />
@@ -22,6 +33,13 @@ export function EmptyState({ onFiles, onYouTube }: Props) {
           <span className="muted ml-2">вставить URL</span>
         </span>
       </div>
+      {onOpenHistory && onDeleteHistory && (
+        <HistoryList
+          entries={historyEntries}
+          onOpen={onOpenHistory}
+          onDelete={onDeleteHistory}
+        />
+      )}
     </div>
   );
 }

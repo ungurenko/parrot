@@ -15,6 +15,23 @@ pub fn save_text(save_dir: &Path, stem: &str, text: &str) -> Result<PathBuf> {
     Ok(candidate)
 }
 
+/// Save a Markdown summary next to the transcript: `<stem>.summary.md`.
+/// Derives save directory and stem from the transcript's saved .txt path.
+/// Overwrites if file already exists (re-generation replaces the previous summary).
+pub fn save_summary(transcript_path: &Path, summary: &str) -> Result<PathBuf> {
+    let dir = transcript_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("не удалось определить папку из пути конспекта"))?;
+    let stem = transcript_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("transcript");
+    std::fs::create_dir_all(dir)?;
+    let candidate = dir.join(format!("{stem}.summary.md"));
+    std::fs::write(&candidate, summary)?;
+    Ok(candidate)
+}
+
 /// Strip control chars and filesystem-hostile characters from a filename stem.
 pub fn sanitize_stem(stem: &str) -> String {
     let trimmed = stem.trim();

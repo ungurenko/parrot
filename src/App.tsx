@@ -11,6 +11,7 @@ import { Onboarding } from "./components/Onboarding";
 import { Toaster } from "@/components/ui/sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useJobEvents } from "./hooks/useJobEvents";
+import { useHistory } from "./hooks/useHistory";
 import { ENGINE_LABEL, type Job, type Settings } from "./types";
 
 type ViewState =
@@ -49,6 +50,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const { history, deleteEntry, loadEntry } = useHistory();
 
   const reloadSettings = useCallback(async () => {
     const s = await invoke<Settings>("get_settings");
@@ -97,6 +99,36 @@ function App() {
       toast.error("Не удалось добавить YouTube", { description: String(e) });
     }
   }, []);
+
+  const handleOpenHistory = useCallback(
+    async (id: string) => {
+      try {
+        const loaded = await loadEntry(id);
+        if (!loaded) return;
+        const rehydrated: Job = {
+          id: loaded.entry.id,
+          sourceName: loaded.entry.sourceName,
+          status: "done",
+          stage: null,
+          percent: 100,
+          text: loaded.text,
+          outputPath: loaded.entry.outputPath,
+          summary: loaded.summary,
+          summaryPath: loaded.entry.summaryPath,
+          summaryStatus: loaded.summary ? "done" : undefined,
+          summaryPercent: loaded.summary ? 100 : undefined,
+        };
+        setJobs((prev) => {
+          const without = prev.filter((j) => j.id !== rehydrated.id);
+          return [rehydrated, ...without];
+        });
+        setSelectedId(rehydrated.id);
+      } catch (e) {
+        toast.error("Не удалось открыть запись", { description: String(e) });
+      }
+    },
+    [loadEntry],
+  );
 
   const view = useMemo(() => pickView(jobs, selectedId), [jobs, selectedId]);
 
@@ -170,7 +202,13 @@ function App() {
       >
         <section className="flex min-h-0 flex-col">
           {view.kind === "empty" && (
-            <EmptyState onFiles={handleFiles} onYouTube={handleYouTube} />
+            <EmptyState
+              onFiles={handleFiles}
+              onYouTube={handleYouTube}
+              historyEntries={history}
+              onOpenHistory={handleOpenHistory}
+              onDeleteHistory={deleteEntry}
+            />
           )}
           {view.kind === "processing" && (
             <ProcessingView job={view.job} onCancel={markCanceling} />
@@ -180,6 +218,7 @@ function App() {
               job={view.job}
               onReset={resetToEmpty}
               engineLabel={engineLabel}
+              summarizerEnabled={settings?.summarizer_enabled ?? false}
             />
           )}
         </section>

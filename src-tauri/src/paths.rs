@@ -93,6 +93,10 @@ pub fn settings_path(app: &AppHandle) -> Result<PathBuf> {
     Ok(app_data_dir(app)?.join("settings.json"))
 }
 
+pub fn history_path(app: &AppHandle) -> Result<PathBuf> {
+    Ok(app_data_dir(app)?.join("history.json"))
+}
+
 pub fn tmp_dir(app: &AppHandle) -> Result<PathBuf> {
     let dir = app.path().app_cache_dir()?.join("tmp");
     std::fs::create_dir_all(&dir)?;

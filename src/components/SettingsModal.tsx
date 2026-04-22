@@ -22,14 +22,21 @@ import { Separator } from "@/components/ui/separator";
 import {
   ENGINE_LABEL,
   LANGUAGE_LABEL,
+  SUMMARIZER_MODEL_LABEL,
+  SUMMARIZER_MODEL_SIZE,
   type Engine,
   type EngineStatuses,
   type ModelProgressDetail,
   type Settings,
+  type SummarizerStatus,
   type TranscriptLanguage,
 } from "../types";
 import { EnginePicker } from "./EnginePicker";
 import { UpdateChecker } from "./UpdateChecker";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
+import { DownloadIcon, Trash2Icon } from "lucide-react";
 
 interface Props {
   onClose: () => void;
@@ -48,14 +55,25 @@ export function SettingsModal({ onClose }: Props) {
   const [modelStage, setModelStage] = useState<"downloading" | "warmup" | "ready">(
     "downloading",
   );
+  const [summarizerStatus, setSummarizerStatus] =
+    useState<SummarizerStatus | null>(null);
+  const [summaryBusy, setSummaryBusy] = useState(false);
+  const [summaryDeleting, setSummaryDeleting] = useState(false);
+  const [summaryProgress, setSummaryProgress] = useState(0);
+  const [summaryStage, setSummaryStage] = useState<
+    "downloading" | "warmup" | "ready"
+  >("downloading");
 
   const refreshModelStatuses = () =>
     invoke<EngineStatuses>("get_engine_statuses").then(setModelStatuses);
+  const refreshSummarizerStatus = () =>
+    invoke<SummarizerStatus>("get_summarizer_status").then(setSummarizerStatus);
 
   useEffect(() => {
     invoke<Settings>("get_settings").then(setSettings);
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
     refreshModelStatuses();
+    refreshSummarizerStatus();
   }, []);
 
   useEffect(() => {
@@ -70,10 +88,19 @@ export function SettingsModal({ onClose }: Props) {
       "model:stage",
       (e) => setModelStage(e.payload),
     );
+    const summaryProgressP = listen<number>("summary_model:progress", (e) => {
+      setSummaryProgress(e.payload);
+    });
+    const summaryStageP = listen<"downloading" | "warmup" | "ready">(
+      "summary_model:stage",
+      (e) => setSummaryStage(e.payload),
+    );
     return () => {
       progressP.then((u) => u());
       progressDetailP.then((u) => u());
       stageP.then((u) => u());
+      summaryProgressP.then((u) => u());
+      summaryStageP.then((u) => u());
     };
   }, []);
 
@@ -153,6 +180,53 @@ export function SettingsModal({ onClose }: Props) {
     }
   };
 
+  const toggleSummarizer = async (enabled: boolean) => {
+    if (!settings) return;
+    const next = { ...settings, summarizer_enabled: enabled };
+    try {
+      await invoke("set_settings", { new: next });
+      setSettings(next);
+      setModelError(null);
+    } catch (e: unknown) {
+      setModelError(String(e));
+    }
+  };
+
+  const prepareSummarizerModel = async () => {
+    setSummaryBusy(true);
+    setModelError(null);
+    setSummaryProgress(1);
+    setSummaryStage("downloading");
+    try {
+      await invoke("download_summarizer_model");
+      setSummaryProgress(100);
+      await refreshSummarizerStatus();
+    } catch (e: unknown) {
+      setModelError(String(e));
+    } finally {
+      setSummaryBusy(false);
+    }
+  };
+
+  const deleteSummarizerModel = async () => {
+    if (!summarizerStatus?.modelReady) return;
+    const ok = window.confirm(
+      `Удалить модель «${SUMMARIZER_MODEL_LABEL}»?\n\nКонспекты не сохранятся, но транскрипции останутся на месте. При необходимости модель можно скачать заново.`,
+    );
+    if (!ok) return;
+    setSummaryDeleting(true);
+    setModelError(null);
+    try {
+      await invoke("delete_summarizer_model");
+      await refreshSummarizerStatus();
+      setSummaryProgress(0);
+    } catch (e: unknown) {
+      setModelError(String(e));
+    } finally {
+      setSummaryDeleting(false);
+    }
+  };
+
   const openLogs = () => invoke("open_logs");
 
   if (!settings) return null;
@@ -212,6 +286,115 @@ export function SettingsModal({ onClose }: Props) {
               </AlertDescription>
             </Alert>
           )}
+
+          <Field className="min-w-0">
+            <FieldLabel>🪶 Конспект</FieldLabel>
+            <label className="summary-toggle">
+              <input
+                type="checkbox"
+                checked={settings.summarizer_enabled}
+                onChange={(e) => toggleSummarizer(e.target.checked)}
+              />
+              <span>
+                Генерировать локальный конспект по транскрипту
+                <span className="summary-toggle-hint">
+                  Запускается вручную после транскрипции. Модель Qwen 3-4B
+                  Instruct (4-bit MLX), работает полностью оффлайн.
+                </span>
+              </span>
+            </label>
+
+            {settings.summarizer_enabled && (
+              <div
+                className={cn(
+                  "engine-card flex min-w-0 flex-col gap-2",
+                  summarizerStatus?.modelReady && "selected",
+                  summarizerStatus && !summarizerStatus.available && "unavailable",
+                )}
+              >
+                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
+                  <div className="flex min-w-0 flex-1 items-start gap-3">
+                    <span className="min-w-0">
+                      <span className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="font-medium leading-snug">
+                          {SUMMARIZER_MODEL_LABEL}
+                        </span>
+                        <Badge variant="outline">{SUMMARIZER_MODEL_SIZE}</Badge>
+                        <Badge variant="secondary">4-bit MLX</Badge>
+                        {summarizerStatus && !summarizerStatus.available && (
+                          <Badge variant="secondary">Недоступна</Badge>
+                        )}
+                      </span>
+                      <span className="mt-1 block whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
+                        {summarizerStatus?.unavailableReason ??
+                          "Разовая загрузка ~2.3 ГБ. После этого конспекты создаются оффлайн."}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 self-start sm:self-auto">
+                    <span
+                      className={cn(
+                        "status-chip",
+                        summarizerStatus?.modelReady && "ready",
+                      )}
+                    >
+                      <span className="dot" aria-hidden="true" />
+                      {summarizerStatus?.modelReady ? "Скачана" : "Не скачана"}
+                    </span>
+                    {!summarizerStatus?.modelReady &&
+                      summarizerStatus?.available && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size={summaryBusy ? "sm" : "icon-sm"}
+                          disabled={summaryBusy || summaryDeleting}
+                          onClick={prepareSummarizerModel}
+                          title="Подготовить модель конспекта"
+                        >
+                          {summaryBusy ? (
+                            `${summaryProgress}%`
+                          ) : (
+                            <DownloadIcon data-icon="inline-start" />
+                          )}
+                        </Button>
+                      )}
+                    {summarizerStatus?.modelReady && (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="icon-sm"
+                        disabled={summaryBusy || summaryDeleting}
+                        onClick={deleteSummarizerModel}
+                        title="Удалить модель конспекта"
+                      >
+                        <Trash2Icon data-icon="inline-start" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {summaryBusy && (
+                  <div className="flex min-w-0 flex-col gap-2 pl-1">
+                    <Progress
+                      value={Math.max(summaryProgress, 2)}
+                      className={summaryStage === "warmup" ? "animate-pulse" : ""}
+                    />
+                    <div className="text-xs text-muted-foreground">
+                      {summaryStage === "warmup"
+                        ? `Прогреваю модель… ${summaryProgress}%`
+                        : `Скачиваю модель… ${summaryProgress}%`}
+                    </div>
+                  </div>
+                )}
+
+                {summaryDeleting && (
+                  <div className="text-xs text-muted-foreground">
+                    Удаляю модель…
+                  </div>
+                )}
+              </div>
+            )}
+          </Field>
 
           <Field className="min-w-0">
             <FieldLabel htmlFor="save-dir">Папка сохранения</FieldLabel>
