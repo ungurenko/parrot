@@ -1,16 +1,16 @@
 {
   "name": "parrot",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "check": "npm run build && npm run check:rust",
     "check:rust": "cd src-tauri && cargo test --locked && cargo fmt --check && cargo clippy --all-targets --all-features --locked -- -D warnings",
-    "build:local": "tauri build",
+    "build:local": "tauri build && bash tools/sign_macos_bundle.sh",
     "preview": "vite preview",
-    "release:mac": "node tools/prepare_release.mjs && tauri build --config src-tauri/tauri.release.conf.json && npm run release:latest-json",
+    "release:mac": "node tools/prepare_release.mjs && tauri build --config src-tauri/tauri.release.conf.json && bash tools/sign_macos_bundle.sh && node tools/repack_macos_release.mjs && npm run release:latest-json",
     "release:latest-json": "node tools/generate_latest_json.mjs",
     "tauri": "tauri"
   },

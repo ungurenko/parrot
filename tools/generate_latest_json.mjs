@@ -26,7 +26,7 @@ if (signatureStat.mtimeMs + 1000 < archiveStat.mtimeMs) {
 
 const latest = {
   version,
-  notes: "Новая версия Parrot.",
+  notes: "Исправлена транскрибация YouTube-ссылок (ошибка подписи yt-dlp под hardened runtime).",
   pub_date: new Date().toISOString(),
   platforms: {
     "darwin-aarch64": {

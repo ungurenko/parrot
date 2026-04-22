@@ -47,6 +47,28 @@ mv ffmpeg ffmpeg-aarch64-apple-darwin && chmod +x ffmpeg-aarch64-apple-darwin
 - `cmake` (для whisper-rs metal build): `brew install cmake`
 - Xcode Command Line Tools (для CoreML)
 
+## Code signing (entitlements)
+
+`yt-dlp_macos` — PyInstaller one-file: на старте распаковывает `Python.framework` в `/var/folders/.../_MEIxxxx/` и делает `dlopen`. Под hardened runtime это падает с `different Team IDs`, потому что embedded Python.framework подписан yt-dlp-автором, а сам процесс — ad-hoc подписью от Tauri.
+
+Фикс: `src-tauri/entitlements.plist` подключён через `bundle.macOS.entitlements`. Ключи:
+- `com.apple.security.cs.disable-library-validation` — разрешает загрузку dylib с другим Team ID (главный ключ).
+- `com.apple.security.cs.allow-dyld-environment-variables` — PyInstaller использует `_PYI_*` env-переменные.
+- `com.apple.security.cs.allow-unsigned-executable-memory` + `com.apple.security.cs.allow-jit` — страховка под CPython extensions.
+
+**Проверка после сборки:**
+```bash
+codesign -d --entitlements - src-tauri/target/release/bundle/macos/Parrot.app/Contents/MacOS/yt-dlp
+```
+Должны быть видны оба ключа. Если sidecar не унаследовал entitlements — пере-подписать вручную:
+```bash
+codesign --force --sign - --entitlements src-tauri/entitlements.plist --options runtime \
+  src-tauri/target/release/bundle/macos/Parrot.app/Contents/MacOS/yt-dlp
+codesign --force --sign - --entitlements src-tauri/entitlements.plist --options runtime \
+  src-tauri/target/release/bundle/macos/Parrot.app
+```
+(sidecar первым, потом сам `.app`, чтобы его подпись охватила уже подписанный ресурс).
+
 ## YouTube download
 
 yt-dlp вызывается с `-f bestaudio/best` + `--newline --progress-template "PROGRESS %(progress._percent_str)s"`. Сырое аудио (m4a/opus/webm) скачивается без ремукса, ffmpeg в один проход делает 16 kHz mono WAV.
