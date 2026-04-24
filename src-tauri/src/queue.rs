@@ -71,6 +71,13 @@ pub struct JobCanceledEvent {
     pub id: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobTitleEvent {
+    pub id: String,
+    pub source_name: String,
+}
+
 #[derive(Debug, Clone)]
 struct QueuedJob {
     sequence: u64,
@@ -322,7 +329,7 @@ async fn prepare_job(
 ) -> Result<PreparedJob> {
     let started = Instant::now();
 
-    let job = queued.job;
+    let mut job = queued.job;
     ensure_model_ready(app, &job.engine)?;
     let tmp = paths::tmp_dir(app)?;
     let wav_path = tmp.join(format!("{}.wav", job.id));
@@ -360,6 +367,16 @@ async fn prepare_job(
             );
             if yt.wav_path != wav_path {
                 std::fs::rename(&yt.wav_path, &wav_path)?;
+            }
+            if !yt.title.trim().is_empty() && yt.title != job.display_name {
+                job.display_name = yt.title.clone();
+                let _ = app.emit(
+                    "job:title",
+                    JobTitleEvent {
+                        id: job.id.clone(),
+                        source_name: yt.title.clone(),
+                    },
+                );
             }
             yt.title
         }

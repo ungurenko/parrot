@@ -20,6 +20,8 @@ pub struct Settings {
     pub language: String,
     #[serde(default)]
     pub summarizer_enabled: bool,
+    #[serde(default)]
+    pub summarizer_promo_seen: bool,
 }
 
 fn default_engine() -> String {
@@ -38,6 +40,7 @@ impl Default for Settings {
             engine: default_engine(),
             language: default_language(),
             summarizer_enabled: false,
+            summarizer_promo_seen: false,
         }
     }
 }
@@ -121,6 +124,7 @@ mod tests {
             engine: "bad-engine".to_string(),
             language: "bad-language".to_string(),
             summarizer_enabled: false,
+            summarizer_promo_seen: false,
         }
         .normalized();
 

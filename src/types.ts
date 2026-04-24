@@ -86,6 +86,7 @@ export interface Settings {
   engine: Engine;
   language: TranscriptLanguage;
   summarizer_enabled: boolean;
+  summarizer_promo_seen: boolean;
 }
 
 export interface SummarizerStatus {

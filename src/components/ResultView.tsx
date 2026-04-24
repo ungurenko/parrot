@@ -9,22 +9,37 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ENGINE_LABEL, type Job } from "../types";
+import { Button } from "@/components/ui/button";
+import {
+  ENGINE_LABEL,
+  SUMMARIZER_MODEL_SIZE,
+  type Job,
+  type Settings,
+} from "../types";
 import { SummaryPanel } from "./SummaryPanel";
 
 interface Props {
   job: Job;
   onReset: () => void;
   engineLabel?: string;
-  summarizerEnabled?: boolean;
+  settings: Settings;
+  onSettingsChange: (next: Settings) => void;
 }
 
-function formatFileName(name: string): string {
-  return name.length > 48 ? `${name.slice(0, 45)}…` : name;
-}
-
-export function ResultView({ job, onReset, engineLabel, summarizerEnabled }: Props) {
+export function ResultView({
+  job,
+  onReset,
+  engineLabel,
+  settings,
+  onSettingsChange,
+}: Props) {
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+  const [pendingAutoDownload, setPendingAutoDownload] = useState(false);
+  const [promoBusy, setPromoBusy] = useState(false);
+  const summarizerEnabled = settings.summarizer_enabled;
+  const showPromoBanner =
+    !settings.summarizer_enabled && !settings.summarizer_promo_seen;
+
   const segments = useMemo(() => {
     if (!job.text) return [] as string[];
     const trimmed = job.text.trim();
@@ -35,6 +50,33 @@ export function ResultView({ job, onReset, engineLabel, summarizerEnabled }: Pro
       .map((s) => s.trim())
       .filter(Boolean);
   }, [job.text]);
+
+  const updateSettings = async (patch: Partial<Settings>) => {
+    const next = { ...settings, ...patch };
+    try {
+      await invoke("set_settings", { new: next });
+      onSettingsChange(next);
+      return true;
+    } catch (e) {
+      toast.error("Не удалось сохранить настройку", { description: String(e) });
+      return false;
+    }
+  };
+
+  const enableSummarizerAndDownload = async () => {
+    if (promoBusy) return;
+    setPromoBusy(true);
+    const ok = await updateSettings({
+      summarizer_enabled: true,
+      summarizer_promo_seen: true,
+    });
+    if (ok) setPendingAutoDownload(true);
+    setPromoBusy(false);
+  };
+
+  const dismissPromo = () => {
+    void updateSettings({ summarizer_promo_seen: true });
+  };
 
   if (job.status === "error") {
     return (
@@ -149,11 +191,47 @@ export function ResultView({ job, onReset, engineLabel, summarizerEnabled }: Pro
           </svg>
           Новая транскрипция
         </button>
-        <span className="pill">
+        <span className="pill min-w-0 flex-1 max-w-[60%] justify-end">
           <span className="led" />
-          {formatFileName(job.sourceName)}
+          <span title={job.sourceName}>{job.sourceName}</span>
         </span>
       </div>
+
+      {showPromoBanner && (
+        <div className="summary-banner" role="region" aria-label="Конспект">
+          <div className="summary-banner-icon" aria-hidden="true">
+            🪶
+          </div>
+          <div className="summary-banner-body">
+            <div className="summary-banner-title">
+              Хотите конспект из этой записи?
+            </div>
+            <div className="summary-banner-text">
+              Локальная модель Qwen 3-4B ({SUMMARIZER_MODEL_SIZE}, оффлайн)
+              соберёт краткое резюме, темы, тезисы и список действий.
+            </div>
+          </div>
+          <div className="summary-banner-actions">
+            <Button
+              type="button"
+              size="sm"
+              onClick={enableSummarizerAndDownload}
+              disabled={promoBusy}
+            >
+              ⬇︎ Скачать модель
+            </Button>
+            <button
+              type="button"
+              className="summary-banner-close"
+              onClick={dismissPromo}
+              aria-label="Скрыть подсказку"
+              title="Скрыть"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="result-scroll min-h-0 flex-1">
         <div className="doc-card">
@@ -246,7 +324,12 @@ export function ResultView({ job, onReset, engineLabel, summarizerEnabled }: Pro
           )}
         </div>
 
-        {summarizerEnabled && <SummaryPanel job={job} />}
+        {summarizerEnabled && (
+          <SummaryPanel
+            job={job}
+            autoStartDownload={pendingAutoDownload}
+          />
+        )}
       </div>
     </div>
   );

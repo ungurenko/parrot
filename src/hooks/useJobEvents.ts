@@ -7,6 +7,7 @@ interface JobProgress { id: string; stage: JobStage; percent: number; }
 interface JobDone { id: string; text: string; outputPath: string; }
 interface JobError { id: string; message: string; }
 interface JobCanceled { id: string; }
+interface JobTitle { id: string; sourceName: string; }
 interface SummaryProgress { id: string; percent: number; stage: SummaryStage; }
 interface SummaryDone { id: string; markdown: string; outputPath: string; }
 interface SummaryError { id: string; message: string; }
@@ -74,6 +75,14 @@ export function useJobEvents(
           j.id === e.payload.id
             ? { ...j, status: "error", error: e.payload.message, stage: null }
             : j,
+        ),
+      );
+    }).then((u) => unlisteners.push(u));
+
+    listen<JobTitle>("job:title", (e) => {
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === e.payload.id ? { ...j, sourceName: e.payload.sourceName } : j,
         ),
       );
     }).then((u) => unlisteners.push(u));

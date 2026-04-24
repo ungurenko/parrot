@@ -1,13 +1,21 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import type { Job } from "../types";
+import {
+  SUMMARIZER_MODEL_LABEL,
+  SUMMARIZER_MODEL_SIZE,
+  type Job,
+  type SummarizerStatus,
+} from "../types";
 
 interface Props {
   job: Job;
+  /** При первом рендере панель сама запросит модель к скачиванию. */
+  autoStartDownload?: boolean;
 }
 
 function renderMarkdown(md: string): React.ReactNode {
@@ -125,13 +133,81 @@ const stageLabel = (stage?: string) => {
   }
 };
 
-export function SummaryPanel({ job }: Props) {
+export function SummaryPanel({ job, autoStartDownload }: Props) {
   const status = job.summaryStatus ?? "idle";
   const percent = job.summaryPercent ?? 0;
   const rendered = useMemo(
     () => (job.summary ? renderMarkdown(job.summary) : null),
     [job.summary],
   );
+
+  const [summarizerStatus, setSummarizerStatus] =
+    useState<SummarizerStatus | null>(null);
+  const [modelInstalling, setModelInstalling] = useState(false);
+  const [modelProgress, setModelProgress] = useState(0);
+  const [modelStage, setModelStage] = useState<
+    "downloading" | "warmup" | "ready"
+  >("downloading");
+  const [modelError, setModelError] = useState<string | null>(null);
+
+  const refreshSummarizerStatus = async () => {
+    try {
+      const s = await invoke<SummarizerStatus>("get_summarizer_status");
+      setSummarizerStatus(s);
+      return s;
+    } catch (e) {
+      console.error("get_summarizer_status failed:", e);
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    refreshSummarizerStatus();
+  }, []);
+
+  useEffect(() => {
+    const progressP = listen<number>("summary_model:progress", (e) => {
+      setModelProgress(e.payload);
+    });
+    const stageP = listen<"downloading" | "warmup" | "ready">(
+      "summary_model:stage",
+      (e) => setModelStage(e.payload),
+    );
+    return () => {
+      progressP.then((u) => u());
+      stageP.then((u) => u());
+    };
+  }, []);
+
+  const installModel = async () => {
+    if (modelInstalling) return;
+    setModelInstalling(true);
+    setModelError(null);
+    setModelProgress(1);
+    setModelStage("downloading");
+    try {
+      await invoke("download_summarizer_model");
+      setModelProgress(100);
+      await refreshSummarizerStatus();
+    } catch (e: unknown) {
+      setModelError(String(e));
+    } finally {
+      setModelInstalling(false);
+    }
+  };
+
+  // Авто-старт скачивания: пользователь нажал «Скачать модель» в промо-баннере
+  // ResultView, и панель только что появилась. Запускаем один раз.
+  const [autoStartHandled, setAutoStartHandled] = useState(false);
+  useEffect(() => {
+    if (autoStartHandled) return;
+    if (!autoStartDownload) return;
+    if (summarizerStatus === null) return; // ждём первого рефреша
+    setAutoStartHandled(true);
+    if (summarizerStatus.available && !summarizerStatus.modelReady) {
+      installModel();
+    }
+  }, [autoStartDownload, summarizerStatus, autoStartHandled]);
 
   const startSummary = async () => {
     if (!job.text || !job.outputPath) return;
@@ -171,6 +247,9 @@ export function SummaryPanel({ job }: Props) {
     });
   };
 
+  const modelReady = summarizerStatus?.modelReady ?? false;
+  const available = summarizerStatus?.available ?? true;
+
   return (
     <div className="summary-card">
       <div className="summary-head">
@@ -179,7 +258,7 @@ export function SummaryPanel({ job }: Props) {
           <h3 className="summary-title">Конспект</h3>
         </div>
         <div className="flex items-center gap-2">
-          {status === "done" && (
+          {modelReady && status === "done" && (
             <>
               <Button
                 type="button"
@@ -210,7 +289,7 @@ export function SummaryPanel({ job }: Props) {
               </Button>
             </>
           )}
-          {status === "generating" && (
+          {modelReady && status === "generating" && (
             <Button
               type="button"
               variant="outline"
@@ -223,7 +302,51 @@ export function SummaryPanel({ job }: Props) {
         </div>
       </div>
 
-      {status === "idle" && (
+      {!available && (
+        <Alert variant="default" className="summary-unavailable">
+          <AlertTitle>Qwen MLX не установлен</AlertTitle>
+          <AlertDescription className="whitespace-pre-wrap break-words">
+            {summarizerStatus?.unavailableReason ??
+              "Для конспекта нужен локальный Qwen MLX. Запустите tools/setup_qwen_mlx.sh из репозитория Parrot."}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {available && !modelReady && !modelInstalling && (
+        <div className="summary-promo">
+          <p className="summary-promo-text">
+            Локальная модель {SUMMARIZER_MODEL_LABEL} ({SUMMARIZER_MODEL_SIZE},
+            работает оффлайн) соберёт из транскрипта краткое резюме, темы,
+            тезисы и список действий.
+          </p>
+          <Button type="button" onClick={installModel}>
+            ⬇︎ Скачать модель ({SUMMARIZER_MODEL_SIZE})
+          </Button>
+          {modelError && (
+            <Alert variant="destructive">
+              <AlertDescription className="whitespace-pre-wrap break-words">
+                {modelError}
+              </AlertDescription>
+            </Alert>
+          )}
+        </div>
+      )}
+
+      {available && modelInstalling && (
+        <div className="summary-progress">
+          <Progress
+            value={Math.max(modelProgress, 2)}
+            className={modelStage === "warmup" ? "animate-pulse" : ""}
+          />
+          <div className="summary-progress-text">
+            {modelStage === "warmup"
+              ? `Прогреваю модель… ${modelProgress}%`
+              : `Скачиваю модель ${SUMMARIZER_MODEL_SIZE}… ${modelProgress}%`}
+          </div>
+        </div>
+      )}
+
+      {available && modelReady && status === "idle" && (
         <div className="summary-empty">
           <p className="summary-empty-text">
             Локальная модель соберёт из транскрипта краткое резюме, темы, тезисы
@@ -239,7 +362,7 @@ export function SummaryPanel({ job }: Props) {
         </div>
       )}
 
-      {status === "generating" && (
+      {available && modelReady && status === "generating" && (
         <div className="summary-progress">
           <Progress value={Math.max(percent, 2)} />
           <div className="summary-progress-text">
@@ -248,7 +371,7 @@ export function SummaryPanel({ job }: Props) {
         </div>
       )}
 
-      {status === "error" && (
+      {available && modelReady && status === "error" && (
         <div className="flex flex-col gap-3">
           <Alert variant="destructive">
             <AlertTitle>Не удалось создать конспект</AlertTitle>
@@ -262,7 +385,7 @@ export function SummaryPanel({ job }: Props) {
         </div>
       )}
 
-      {status === "done" && rendered && (
+      {available && modelReady && status === "done" && rendered && (
         <article className="summary-body">{rendered}</article>
       )}
     </div>

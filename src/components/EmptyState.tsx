@@ -19,7 +19,7 @@ export function EmptyState({
   onDeleteHistory,
 }: Props) {
   return (
-    <div className="flex flex-col gap-5">
+    <div className="empty-scroll flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto pr-1">
       <DropZone onFiles={onFiles} />
       <YouTubeInput onSubmit={onYouTube} />
       <div className="hints">

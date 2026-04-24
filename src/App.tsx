@@ -213,12 +213,13 @@ function App() {
           {view.kind === "processing" && (
             <ProcessingView job={view.job} onCancel={markCanceling} />
           )}
-          {view.kind === "result" && (
+          {view.kind === "result" && settings && (
             <ResultView
               job={view.job}
               onReset={resetToEmpty}
               engineLabel={engineLabel}
-              summarizerEnabled={settings?.summarizer_enabled ?? false}
+              settings={settings}
+              onSettingsChange={setSettings}
             />
           )}
         </section>

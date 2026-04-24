@@ -292,6 +292,15 @@ body {
     font: 500 var(--fs-sm) var(--font-sans);
     color: var(--ink-2);
     max-width: 280px;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pill > span:not(.led) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .led {
@@ -1118,6 +1127,84 @@ body {
     background: rgba(0,0,0,0.06);
     font: 500 12px var(--font-mono);
     color: var(--ink);
+  }
+
+  /* Inline promo card inside SummaryPanel: model not yet downloaded */
+  .summary-promo {
+    display: flex; flex-direction: column; gap: var(--s-3);
+    align-items: flex-start;
+    padding: var(--s-3) var(--s-4);
+    border-radius: var(--r-card);
+    background: rgba(255,255,255,0.45);
+    border: 1px dashed rgba(255, 200, 140, 0.55);
+  }
+  .summary-promo-text {
+    margin: 0;
+    font-size: var(--fs-sm);
+    line-height: var(--lh-sm);
+    color: var(--ink-2);
+  }
+  .summary-unavailable {
+    background: rgba(255, 250, 240, 0.7);
+    border-color: rgba(255, 200, 140, 0.45);
+  }
+
+  /* One-time promo banner above ResultView */
+  .summary-banner {
+    display: flex; align-items: flex-start; gap: var(--s-3);
+    padding: var(--s-3) var(--s-4);
+    border-radius: var(--r-card);
+    background: linear-gradient(180deg, rgba(255, 248, 236, 0.82) 0%, rgba(252, 240, 220, 0.65) 100%);
+    border: 1px solid rgba(255, 200, 140, 0.45);
+    box-shadow: var(--shadow-sm);
+    backdrop-filter: blur(14px) saturate(150%);
+    -webkit-backdrop-filter: blur(14px) saturate(150%);
+  }
+  .summary-banner-icon {
+    flex: 0 0 auto;
+    font-size: 22px;
+    line-height: 1;
+    margin-top: 2px;
+  }
+  .summary-banner-body {
+    flex: 1 1 auto; min-width: 0;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .summary-banner-title {
+    font: 600 var(--fs-sm)/var(--lh-sm) var(--font-sans);
+    color: var(--ink);
+    letter-spacing: -0.005em;
+  }
+  .summary-banner-text {
+    font-size: var(--fs-xs);
+    line-height: var(--lh-sm);
+    color: var(--ink-3);
+  }
+  .summary-banner-actions {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: var(--s-2);
+  }
+  .summary-banner-close {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--ink-3);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .summary-banner-close:hover {
+    background: rgba(0,0,0,0.05);
+    border-color: rgba(0,0,0,0.08);
+    color: var(--ink);
+  }
+
+  @media (max-width: 600px) {
+    .summary-banner { flex-wrap: wrap; }
+    .summary-banner-actions { width: 100%; justify-content: flex-end; }
   }
 
   /* History list on empty state */

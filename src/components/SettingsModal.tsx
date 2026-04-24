@@ -201,6 +201,15 @@ export function SettingsModal({ onClose }: Props) {
       await invoke("download_summarizer_model");
       setSummaryProgress(100);
       await refreshSummarizerStatus();
+      if (settings && !settings.summarizer_promo_seen) {
+        const next = { ...settings, summarizer_promo_seen: true };
+        try {
+          await invoke("set_settings", { new: next });
+          setSettings(next);
+        } catch (e) {
+          console.error("set_settings (promo_seen) failed:", e);
+        }
+      }
     } catch (e: unknown) {
       setModelError(String(e));
     } finally {
@@ -296,10 +305,11 @@ export function SettingsModal({ onClose }: Props) {
                 onChange={(e) => toggleSummarizer(e.target.checked)}
               />
               <span>
-                Генерировать локальный конспект по транскрипту
+                Показывать блок конспекта в результате транскрипции
                 <span className="summary-toggle-hint">
-                  Запускается вручную после транскрипции. Модель Qwen 3-4B
-                  Instruct (4-bit MLX), работает полностью оффлайн.
+                  Кнопка «Сгенерировать» появится под каждым готовым
+                  транскриптом. Модель Qwen 3-4B Instruct (4-bit MLX), работает
+                  полностью оффлайн.
                 </span>
               </span>
             </label>
