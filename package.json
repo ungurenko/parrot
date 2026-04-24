@@ -10,7 +10,7 @@
     "check:rust": "cd src-tauri && cargo test --locked && cargo fmt --check && cargo clippy --all-targets --all-features --locked -- -D warnings",
     "build:local": "tauri build && bash tools/sign_macos_bundle.sh",
     "preview": "vite preview",
-    "release:mac": "node tools/prepare_release.mjs && tauri build --config src-tauri/tauri.release.conf.json && bash tools/sign_macos_bundle.sh && node tools/repack_macos_release.mjs && npm run release:latest-json",
+    "release:mac": "node tools/release_mac.mjs",
     "release:latest-json": "node tools/generate_latest_json.mjs",
     "release:upload": "node tools/upload_release.mjs",
     "tauri": "tauri"
