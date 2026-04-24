@@ -605,6 +605,12 @@ fn open_logs(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn log_client_error(scope: String, message: String) -> Result<(), String> {
+    tracing::error!(scope = %scope, "client error: {}", message);
+    Ok(())
+}
+
 fn dir_size_bytes(path: &std::path::Path) -> u64 {
     let mut total: u64 = 0;
     let Ok(entries) = std::fs::read_dir(path) else {
@@ -751,6 +757,7 @@ pub fn run() {
             cancel_job,
             open_in_finder,
             open_logs,
+            log_client_error,
             get_summarizer_status,
             download_summarizer_model,
             delete_summarizer_model,

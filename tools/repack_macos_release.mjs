@@ -46,10 +46,24 @@ await Promise.all(
 
 // 2. Repack Parrot.app.tar.gz from the signed .app, matching Tauri's layout
 //    (Parrot.app/ at the archive root).
+//    IMPORTANT: macOS BSD tar writes AppleDouble resource forks (`._*` files)
+//    into the archive by default. Tauri's updater then tries to unpack those
+//    siblings as real apps and bails with
+//    "failed to unpack `._Parrot.app` into …/tauri_updated_app…/".
+//    COPYFILE_DISABLE=1 + --no-mac-metadata tell tar to skip them.
 console.log(`Packing ${basename(tarballPath)}...`);
 await exec(
   "tar",
-  ["-C", dirname(appPath), "-czf", tarballPath, basename(appPath)],
+  [
+    "--no-mac-metadata",
+    "--no-xattrs",
+    "-C",
+    dirname(appPath),
+    "-czf",
+    tarballPath,
+    basename(appPath),
+  ],
+  { env: { ...process.env, COPYFILE_DISABLE: "1" } },
 );
 
 // 3. Sign the new tarball with Tauri's updater key.

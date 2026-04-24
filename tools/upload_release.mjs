@@ -71,6 +71,48 @@ await exec("gh", [
   "--clobber",
 ]);
 
+// Post-upload verification: make sure the auto-updater manifest GitHub
+// actually serves matches the one we just built, and that the tar.gz it
+// references is reachable. Catches broken releases before users hit them.
+const latestJsonUrl = `https://github.com/${repo}/releases/latest/download/latest.json`;
+console.log(`Verifying ${latestJsonUrl} ...`);
+
+async function verifyManifest(attempt = 1) {
+  const res = await fetch(latestJsonUrl, { redirect: "follow" });
+  if (!res.ok) {
+    throw new Error(`latest.json HTTP ${res.status} from ${latestJsonUrl}`);
+  }
+  const manifest = await res.json();
+  if (manifest.version !== version) {
+    // GitHub CDN sometimes lags a few seconds after `release upload` — retry
+    // up to 3 times before failing the release.
+    if (attempt < 3) {
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+      return verifyManifest(attempt + 1);
+    }
+    throw new Error(
+      `latest.json serves version=${manifest.version}, expected ${version}. ` +
+        `GitHub may still be propagating the release — try again in a minute.`,
+    );
+  }
+  const platform = manifest?.platforms?.["darwin-aarch64"];
+  if (!platform?.signature || !platform?.url) {
+    throw new Error(
+      `latest.json missing platforms["darwin-aarch64"].{signature,url}: ${JSON.stringify(manifest)}`,
+    );
+  }
+  const headRes = await fetch(platform.url, { method: "HEAD", redirect: "follow" });
+  if (!headRes.ok) {
+    throw new Error(
+      `Updater tarball not reachable: HEAD ${platform.url} → HTTP ${headRes.status}`,
+    );
+  }
+  return manifest.version;
+}
+
+const verifiedVersion = await verifyManifest();
+console.log(`✓ Updater manifest serves v${verifiedVersion} and tarball is reachable.`);
+
 console.log(`Done. Stable links:`);
 console.log(`  https://github.com/${repo}/releases/latest/download/Parrot.dmg`);
-console.log(`  https://github.com/${repo}/releases/latest/download/latest.json`);
+console.log(`  ${latestJsonUrl}`);
