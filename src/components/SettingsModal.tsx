@@ -38,11 +38,14 @@ import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { DownloadIcon, Trash2Icon } from "lucide-react";
 
+import type { AutoUpdate } from "../hooks/useAutoUpdate";
+
 interface Props {
   onClose: () => void;
+  updater: AutoUpdate;
 }
 
-export function SettingsModal({ onClose }: Props) {
+export function SettingsModal({ onClose, updater }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [appVersion, setAppVersion] = useState("");
   const [modelStatuses, setModelStatuses] = useState<EngineStatuses>({});
@@ -440,7 +443,7 @@ export function SettingsModal({ onClose }: Props) {
             >
               📜 Открыть логи
             </Button>
-            <UpdateChecker />
+            <UpdateChecker updater={updater} />
           </div>
           <div className="min-w-0 text-left text-xs text-muted-foreground sm:shrink-0 sm:text-right">
             <div>Разработано Александром Унгуренко, 2026</div>

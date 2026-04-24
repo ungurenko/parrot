@@ -12,6 +12,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useJobEvents } from "./hooks/useJobEvents";
 import { useHistory } from "./hooks/useHistory";
+import { useAutoUpdate } from "./hooks/useAutoUpdate";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { ENGINE_LABEL, type Job, type Settings } from "./types";
 
 type ViewState =
@@ -50,7 +52,9 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
   const { history, deleteEntry, loadEntry } = useHistory();
+  const updater = useAutoUpdate();
 
   const reloadSettings = useCallback(async () => {
     const s = await invoke<Settings>("get_settings");
@@ -197,6 +201,14 @@ function App() {
         </div>
       </header>
 
+      {updater.available && !updateDismissed && (
+        <UpdateBanner
+          updater={updater}
+          onDismiss={() => setUpdateDismissed(true)}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+      )}
+
       <div
         className={`grid min-h-0 flex-1 gap-4 p-4 ${showQueue ? "queue-grid" : ""}`}
       >
@@ -241,6 +253,7 @@ function App() {
 
       {settingsOpen && (
         <SettingsModal
+          updater={updater}
           onClose={() => {
             setSettingsOpen(false);
             reloadSettings();
