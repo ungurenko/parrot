@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "release:mac": "node tools/prepare_release.mjs && tauri build --config src-tauri/tauri.release.conf.json && bash tools/sign_macos_bundle.sh && node tools/repack_macos_release.mjs && npm run release:latest-json",
     "release:latest-json": "node tools/generate_latest_json.mjs",
+    "release:upload": "node tools/upload_release.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

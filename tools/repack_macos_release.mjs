@@ -4,8 +4,9 @@
 // installs ship the entitled version.
 
 import { execFile } from "node:child_process";
-import { readFile, rm, stat } from "node:fs/promises";
-import { resolve, dirname, basename } from "node:path";
+import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve, dirname, basename, join } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
@@ -18,6 +19,7 @@ const version = tauriConfig.version;
 
 const macosBundle = resolve(root, "src-tauri/target/release/bundle/macos");
 const dmgBundle = resolve(root, "src-tauri/target/release/bundle/dmg");
+const bundleDmgScript = resolve(dmgBundle, "bundle_dmg.sh");
 const appPath = resolve(macosBundle, "Parrot.app");
 const tarballPath = resolve(macosBundle, "Parrot.app.tar.gz");
 const sigPath = resolve(macosBundle, "Parrot.app.tar.gz.sig");
@@ -57,19 +59,55 @@ await exec("npx", ["tauri", "signer", "sign", tarballPath], {
   env: process.env,
 });
 
-// 4. Rebuild DMG from the signed .app (UDZO matches Tauri's bundle_dmg output).
+// 4. Rebuild DMG from the signed .app using Tauri's own bundle_dmg.sh,
+//    so the installer window keeps the "drag to Applications" layout
+//    (otherwise hdiutil -srcfolder yields a bare DMG with no symlink).
 console.log(`Packing ${basename(dmgPath)}...`);
-await exec("hdiutil", [
-  "create",
-  "-volname",
-  "Parrot",
-  "-srcfolder",
-  appPath,
-  "-ov",
-  "-format",
-  "UDZO",
-  dmgPath,
-]);
+try {
+  await stat(bundleDmgScript);
+} catch {
+  throw new Error(
+    `bundle_dmg.sh missing at ${bundleDmgScript}. Run \`tauri build\` first so Tauri generates it.`,
+  );
+}
+
+const stagingDir = await mkdtemp(join(tmpdir(), "parrot-dmg-"));
+try {
+  await cp(appPath, join(stagingDir, basename(appPath)), {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
+
+  await exec(
+    "bash",
+    [
+      bundleDmgScript,
+      "--volname",
+      "Parrot",
+      "--icon",
+      basename(appPath),
+      "180",
+      "170",
+      "--app-drop-link",
+      "480",
+      "170",
+      "--window-size",
+      "660",
+      "400",
+      "--icon-size",
+      "80",
+      "--hide-extension",
+      basename(appPath),
+      "--format",
+      "UDZO",
+      dmgPath,
+      stagingDir,
+    ],
+    { cwd: dmgBundle },
+  );
+} finally {
+  await rm(stagingDir, { recursive: true, force: true });
+}
 
 const [archiveStat, signatureStat, dmgStat] = await Promise.all([
   stat(tarballPath),
