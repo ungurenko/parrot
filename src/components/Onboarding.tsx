@@ -128,7 +128,7 @@ export function Onboarding({ onDone }: Props) {
 
   return (
     <main className="app-shell fixed inset-0 flex items-center justify-center overflow-y-auto p-6">
-      <Card className="glass-modal w-full max-w-lg border-0 p-0 shadow-none">
+      <Card className="glass-modal w-full max-w-2xl border-0 p-0 shadow-none">
         <CardHeader className="p-6 pb-4">
           <CardTitle className="flex items-center gap-3 text-2xl">
             <span
