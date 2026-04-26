@@ -11,8 +11,12 @@ use tokio::time::{timeout, Duration};
 use crate::binaries;
 use crate::cancellation::CancelToken;
 
+// YouTube усилила anti-bot защиту: client `android_vr` теперь падает с
+// "Sign in to confirm you're not a bot". Используем цепочку клиентов
+// `mweb,web_embedded,default` - они обходят проверку и не требуют PO Token
+// для bestaudio формата. yt-dlp пробует их по очереди в одном запуске.
 const FAST_YOUTUBE_ARGS: &str =
-    "youtube:player_client=android_vr;player_skip=js;skip=hls,dash,translated_subs";
+    "youtube:player_client=mweb,web_embedded,default;player_skip=js;skip=hls,dash,translated_subs";
 const YT_DLP_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
 const FFMPEG_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
