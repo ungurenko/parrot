@@ -372,6 +372,20 @@ fn get_summarizer_status(app: AppHandle) -> summarizer_qwen3::SummarizerStatus {
 }
 
 #[tauri::command]
+async fn setup_summarizer_env(app: AppHandle) -> Result<(), String> {
+    let app_for_task = app.clone();
+    let app_for_log = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        summarizer_qwen3::install_env(&app_for_task, |line| {
+            let _ = app_for_log.emit("summary_env:progress", line.to_string());
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn download_summarizer_model(app: AppHandle) -> Result<(), String> {
     let _ = app.emit("summary_model:progress", 1u32);
     let _ = app.emit("summary_model:stage", "downloading");
@@ -759,6 +773,7 @@ pub fn run() {
             open_logs,
             log_client_error,
             get_summarizer_status,
+            setup_summarizer_env,
             download_summarizer_model,
             delete_summarizer_model,
             summarize,

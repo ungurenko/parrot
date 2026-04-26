@@ -67,6 +67,10 @@ pub fn qwen_cache_dir(app: &AppHandle) -> Result<PathBuf> {
     Ok(dir)
 }
 
+pub fn qwen_env_dir(app: &AppHandle) -> Result<PathBuf> {
+    Ok(app_data_dir(app)?.join(".qwen-mlx").join("venv"))
+}
+
 pub fn parakeet_files_ready(app: &AppHandle) -> bool {
     let Ok(dir) = parakeet_dir(app) else {
         return false;

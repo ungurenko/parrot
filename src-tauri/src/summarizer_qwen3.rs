@@ -27,7 +27,7 @@ pub struct SummarizerStatus {
 }
 
 pub fn status(app: &AppHandle) -> SummarizerStatus {
-    let unavailable_reason = match resolve_python() {
+    let unavailable_reason = match resolve_python(app) {
         Ok(_) => None,
         Err(e) => Some(e.to_string()),
     };
@@ -40,7 +40,7 @@ pub fn status(app: &AppHandle) -> SummarizerStatus {
 }
 
 pub fn is_ready(app: &AppHandle) -> bool {
-    resolve_python().is_ok() && model_cache_exists(app)
+    resolve_python(app).is_ok() && model_cache_exists(app)
 }
 
 pub fn model_cache_exists(app: &AppHandle) -> bool {
@@ -67,7 +67,7 @@ pub fn delete_model(app: &AppHandle) -> Result<()> {
 
 /// Download the model weights by running a short generation that triggers HF download.
 pub fn warmup_model(app: &AppHandle) -> Result<()> {
-    let python = resolve_python()?;
+    let python = resolve_python(app)?;
     let cache_dir = paths::qwen_cache_dir(app)?;
 
     let child = mlx_lm_command(&python, &cache_dir)
@@ -99,7 +99,7 @@ pub fn generate_summary(
     transcript: &str,
     cancel: Arc<CancelToken>,
 ) -> Result<String> {
-    let python = resolve_python()?;
+    let python = resolve_python(app)?;
     let cache_dir = paths::qwen_cache_dir(app)?;
 
     let system_prompt = prompts::SUMMARY_SYSTEM_PROMPT;
@@ -173,7 +173,7 @@ fn mlx_lm_command(python: &Path, cache_dir: &Path) -> Command {
     cmd
 }
 
-fn resolve_python() -> Result<PathBuf> {
+fn resolve_python(app: &AppHandle) -> Result<PathBuf> {
     if let Some(path) = env::var_os("PARROT_QWEN_PYTHON") {
         let p = PathBuf::from(path);
         if p.exists() {
@@ -192,6 +192,16 @@ fn resolve_python() -> Result<PathBuf> {
         }
     }
 
+    // User-space venv created by `setup_summarizer_env` Tauri command —
+    // works for users who installed Parrot from the .dmg and have no repo.
+    if let Ok(env_dir) = paths::qwen_env_dir(app) {
+        let py = env_dir.join("bin/python");
+        if py.exists() {
+            return Ok(py);
+        }
+    }
+
+    // Repo-local venv created by `tools/setup_qwen_mlx.sh` — the dev path.
     for root in candidate_roots() {
         let path = root.join(".qwen-mlx/venv/bin/python");
         if path.exists() {
@@ -200,7 +210,7 @@ fn resolve_python() -> Result<PathBuf> {
     }
 
     Err(anyhow!(
-        "Python venv для MLX не найден. Запустите tools/setup_qwen_mlx.sh."
+        "Python venv для конспекта не установлен. Нажмите «Установить окружение» в настройках."
     ))
 }
 
@@ -218,6 +228,117 @@ fn candidate_roots() -> Vec<PathBuf> {
         roots.push(parent.to_path_buf());
     }
     roots
+}
+
+/// Locate a usable `python3.X` (3.10+) for creating the MLX venv.
+/// Searches the standard Homebrew + system locations; we don't trust
+/// `$PATH` here because GUI apps inherit a minimal env from launchd.
+fn find_system_python() -> Result<PathBuf> {
+    // Prefer 3.12 (matches dev setup), then 3.13/3.11/3.10 as fallbacks.
+    const CANDIDATES: &[&str] = &[
+        "/opt/homebrew/bin/python3.12",
+        "/opt/homebrew/bin/python3.13",
+        "/opt/homebrew/bin/python3.11",
+        "/opt/homebrew/bin/python3.10",
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3.12",
+        "/usr/local/bin/python3.13",
+        "/usr/local/bin/python3.11",
+        "/usr/local/bin/python3.10",
+        "/usr/local/bin/python3",
+        "/usr/bin/python3",
+    ];
+    for c in CANDIDATES {
+        let p = PathBuf::from(c);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    Err(anyhow!(
+        "Python 3.10+ не найден. Установите его: `brew install python@3.12` (или скачайте с python.org), затем нажмите «Установить окружение» снова."
+    ))
+}
+
+/// Bootstrap the user-space MLX venv: create it, upgrade pip, install mlx-lm.
+/// Idempotent — if the venv already exists with `mlx_lm` importable, returns
+/// quickly. Streams progress lines via `on_progress`.
+pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -> Result<()> {
+    let env_dir = paths::qwen_env_dir(app)?;
+    let venv_python = env_dir.join("bin/python");
+
+    if let Some(parent) = env_dir.parent() {
+        std::fs::create_dir_all(parent).context("Не удалось создать каталог окружения")?;
+    }
+
+    // Step 1 — create venv if missing.
+    if !venv_python.exists() {
+        on_progress("Создаю Python venv…");
+        let system_python = find_system_python()?;
+        let out = Command::new(&system_python)
+            .arg("-m")
+            .arg("venv")
+            .arg(&env_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .context("Не удалось запустить python -m venv")?;
+        if !out.status.success() {
+            return Err(command_error(
+                "Не удалось создать venv",
+                &out.stderr,
+                out.status.code(),
+            ));
+        }
+    } else {
+        on_progress("Использую существующий venv");
+    }
+
+    // Step 2 — upgrade pip (best-effort; skip failure to keep going).
+    on_progress("Обновляю pip…");
+    let _ = Command::new(&venv_python)
+        .args(["-m", "pip", "install", "--upgrade", "pip"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    // Step 3 — install mlx-lm (the only Python dep the summarizer needs).
+    on_progress("Устанавливаю mlx-lm (~50 МБ)…");
+    let out = Command::new(&venv_python)
+        .args(["-m", "pip", "install", "--disable-pip-version-check", "mlx-lm>=0.24.0"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Не удалось запустить pip install mlx-lm")?;
+    if !out.status.success() {
+        return Err(command_error(
+            "pip install mlx-lm завершился с ошибкой",
+            &out.stderr,
+            out.status.code(),
+        ));
+    }
+
+    // Step 4 — sanity check: import mlx_lm.
+    on_progress("Проверяю установку…");
+    let out = Command::new(&venv_python)
+        .args(["-c", "import mlx_lm; print(mlx_lm.__version__)"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Не удалось проверить mlx_lm")?;
+    if !out.status.success() {
+        return Err(command_error(
+            "mlx_lm не импортируется после установки",
+            &out.stderr,
+            out.status.code(),
+        ));
+    }
+
+    on_progress("Готово");
+    Ok(())
 }
 
 fn dir_size(path: &Path) -> u64 {

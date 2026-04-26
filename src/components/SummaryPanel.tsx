@@ -304,10 +304,10 @@ export function SummaryPanel({ job, autoStartDownload }: Props) {
 
       {!available && (
         <Alert variant="default" className="summary-unavailable">
-          <AlertTitle>Qwen MLX не установлен</AlertTitle>
+          <AlertTitle>Окружение для конспекта не установлено</AlertTitle>
           <AlertDescription className="whitespace-pre-wrap break-words">
             {summarizerStatus?.unavailableReason ??
-              "Для конспекта нужен локальный Qwen MLX. Запустите tools/setup_qwen_mlx.sh из репозитория Parrot."}
+              "Откройте «⚙️ Настройки» → раздел «🪶 Конспект» → нажмите «Установить окружение»."}
           </AlertDescription>
         </Alert>
       )}

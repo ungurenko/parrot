@@ -66,6 +66,8 @@ export function SettingsModal({ onClose, updater }: Props) {
   const [summaryStage, setSummaryStage] = useState<
     "downloading" | "warmup" | "ready"
   >("downloading");
+  const [envSetupBusy, setEnvSetupBusy] = useState(false);
+  const [envSetupStatus, setEnvSetupStatus] = useState<string | null>(null);
 
   const refreshModelStatuses = () =>
     invoke<EngineStatuses>("get_engine_statuses").then(setModelStatuses);
@@ -98,12 +100,16 @@ export function SettingsModal({ onClose, updater }: Props) {
       "summary_model:stage",
       (e) => setSummaryStage(e.payload),
     );
+    const envProgressP = listen<string>("summary_env:progress", (e) =>
+      setEnvSetupStatus(e.payload),
+    );
     return () => {
       progressP.then((u) => u());
       progressDetailP.then((u) => u());
       stageP.then((u) => u());
       summaryProgressP.then((u) => u());
       summaryStageP.then((u) => u());
+      envProgressP.then((u) => u());
     };
   }, []);
 
@@ -192,6 +198,22 @@ export function SettingsModal({ onClose, updater }: Props) {
       setModelError(null);
     } catch (e: unknown) {
       setModelError(String(e));
+    }
+  };
+
+  const setupSummarizerEnv = async () => {
+    setEnvSetupBusy(true);
+    setModelError(null);
+    setEnvSetupStatus("Подготовка…");
+    try {
+      await invoke("setup_summarizer_env");
+      setEnvSetupStatus(null);
+      await refreshSummarizerStatus();
+    } catch (e: unknown) {
+      setModelError(String(e));
+      setEnvSetupStatus(null);
+    } finally {
+      setEnvSetupBusy(false);
     }
   };
 
@@ -354,6 +376,18 @@ export function SettingsModal({ onClose, updater }: Props) {
                       <span className="dot" aria-hidden="true" />
                       {summarizerStatus?.modelReady ? "Скачана" : "Не скачана"}
                     </span>
+                    {summarizerStatus && !summarizerStatus.available && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={envSetupBusy}
+                        onClick={setupSummarizerEnv}
+                        title="Установить Python-окружение для конспекта"
+                      >
+                        {envSetupBusy ? "Устанавливаю…" : "Установить окружение"}
+                      </Button>
+                    )}
                     {!summarizerStatus?.modelReady &&
                       summarizerStatus?.available && (
                         <Button
@@ -403,6 +437,12 @@ export function SettingsModal({ onClose, updater }: Props) {
                 {summaryDeleting && (
                   <div className="text-xs text-muted-foreground">
                     Удаляю модель…
+                  </div>
+                )}
+
+                {(envSetupBusy || envSetupStatus) && (
+                  <div className="text-xs text-muted-foreground pl-1">
+                    {envSetupStatus ?? "Подготовка окружения…"}
                   </div>
                 )}
               </div>
