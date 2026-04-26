@@ -30,7 +30,7 @@
 | `src-tauri/src/transcriber.rs` | Whisper engine (whisper-rs + Metal + CoreML) |
 | `src-tauri/src/transcriber_parakeet.rs` | Parakeet V3 engine (parakeet-rs, ONNX, int8, 8 потоков) |
 | `src-tauri/src/transcriber_qwen.rs` | Qwen3-ASR MLX engine (subprocess + warm server) |
-| `src-tauri/src/summarizer_qwen3.rs` | Локальный LLM-конспект через `mlx_lm.generate` (subprocess из `.qwen-mlx/venv`). Тот же HF_HOME, что и ASR |
+| `src-tauri/src/summarizer_qwen3.rs` | Локальный LLM-конспект через `mlx_lm.generate` (subprocess из user-space venv). `install_env` сам качает standalone Python от astral-sh + ставит mlx-lm — без системных зависимостей. Тот же HF_HOME, что и ASR |
 | `src-tauri/src/prompts.rs` | Системный и user-промпт для конспекта на русском |
 | `src-tauri/src/model.rs` | Скачивание моделей с прогрессом |
 | `src-tauri/src/paths.rs` | Пути к моделям/настройкам/логам через Tauri API |
@@ -44,7 +44,8 @@
 ## Ключевые паттерны
 
 - **Движки транскрибации** — четыре реализации (Parakeet, Whisper, Qwen3-ASR 1.7B/0.6B MLX), выбор через `settings.engine`, диспатч в очереди. Дефолт — `parakeet`; Qwen показывается как недоступный, если CLI `mlx-qwen3-asr` не установлен.
-- **Локальный LLM-конспект** — опциональная фича (`settings.summarizer_enabled`, default `false`). Модель `mlx-community/Qwen3-4B-Instruct-2507-4bit` (~2.3 GB) качается в тот же `qwen_cache_dir`, запускается subprocess-per-call через `python -m mlx_lm generate` из `.qwen-mlx/venv`. Кнопка «Сгенерировать конспект» в `ResultView` → `SummaryPanel`. Результат сохраняется как `<stem>.summary.md` рядом с транскриптом.
+- **Локальный LLM-конспект** — опциональная фича (`settings.summarizer_enabled`, default `false`). Модель `mlx-community/Qwen3-4B-Instruct-2507-4bit` (~2.3 GB) качается в `qwen_cache_dir`, запускается subprocess-per-call через `python -m mlx_lm generate` из `paths::qwen_env_dir` (user-space venv). Кнопка «Сгенерировать конспект» в `ResultView` → `SummaryPanel`. Результат сохраняется как `<stem>.summary.md` рядом с транскриптом.
+- **Автоустановка окружения для саммарайзера** — Tauri-команда `setup_summarizer_env` вызывает `summarizer_qwen3::install_env`, которая последовательно: качает pinned cpython 3.12.13 от astral-sh/python-build-standalone (~17.8 МБ, SHA256-проверка) в `paths::qwen_python_dir` → создаёт venv в `qwen_env_dir` → ставит `mlx-lm`. URL и SHA256 захардкожены в константах `STANDALONE_PYTHON_URL`/`STANDALONE_PYTHON_SHA256` — менять их вместе. Прогресс через events `summary_env:progress` (строки). Идемпотентно: повторный вызов на готовом окружении возвращается мгновенно. `tools/setup_qwen_mlx.sh` оставлен только как dev-fallback.
 - **Валидация `transcript_path` для саммари** — принимаемый из IPC путь обязан быть `.txt` внутри `save_dir` (canonicalize обе стороны). Защита от попыток записать `.summary.md` в произвольное место FS.
 - **Отмена задач** — IPC `cancel_job(id)` ставит atomic-флаг + шлёт `SIGTERM` зарегистрированным PID (ffmpeg / yt-dlp / mlx-qwen3-asr / mlx_lm). Саммари отменяется через `cancel_summary(id)` против отдельного `summary_cancel: CancelRegistry` в `AppState`. Отменённые эмитят `job:canceled` / `summary:canceled`.
 - **Race-safe CancelToken** — `cancel()` держит лок pids при переключении флага; `register_pid()` под тем же локом проверяет флаг и шлёт SIGTERM сразу, если cancel уже был. `try_create()` атомарно отказывает в повторном старте для того же id.
@@ -64,11 +65,11 @@
 |--------|-------|------|
 | Qwen3-ASR 0.6B | HF-модель `Qwen/Qwen3-ASR-0.6B`, CLI `mlx-qwen3-asr` | `…/qwen-mlx/` (HF_HOME), CLI в `.qwen-mlx/venv/bin/` |
 | Qwen3-ASR 1.7B | HF-модель `Qwen/Qwen3-ASR-1.7B` | там же |
-| Qwen 3-4B Instruct (саммари) | HF-модель `mlx-community/Qwen3-4B-Instruct-2507-4bit`, через `mlx_lm` Python-модуль | тот же `…/qwen-mlx/` (HF_HOME), Python в `.qwen-mlx/venv/bin/python` |
+| Qwen 3-4B Instruct (саммари) | HF-модель `mlx-community/Qwen3-4B-Instruct-2507-4bit`, через `mlx_lm` Python-модуль | тот же `…/qwen-mlx/` (HF_HOME). Standalone Python в `…/.qwen-mlx/python/bin/python3.12`, venv в `…/.qwen-mlx/venv/bin/python` (всё в Application Support) |
 | Parakeet | `encoder-model.int8.onnx`, `decoder_joint-model.int8.onnx`, `vocab.txt` | `…/models/parakeet-v3/` |
 | Whisper | `ggml-large-v3-turbo-q5_0.bin` + `ggml-large-v3-turbo-encoder.mlmodelc/` | `~/Library/Application Support/com.alexk.parrot/models/` |
 
-Venv `.qwen-mlx/venv/` создаётся через `tools/setup_qwen_mlx.sh` и содержит оба пакета: `mlx-qwen3-asr[serve]` (транскрипция) + `mlx-lm>=0.24.0` (саммари).
+Venv для саммари (`mlx-lm>=0.24.0`) создаётся прямо из приложения через `setup_summarizer_env` — Python тоже скачивается автоматически (см. паттерн «Автоустановка окружения для саммарайзера»). Для Qwen ASR-движков (CLI `mlx-qwen3-asr[serve]`) пока работает только dev-флоу через `tools/setup_qwen_mlx.sh` — у DMG-пользователей Qwen ASR показывается недоступным.
 
 Детали скачивания и URL — в `.claude/rules/models.md`.
 

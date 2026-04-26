@@ -11,6 +11,14 @@ paths: "src-tauri/src/{model,paths,transcriber*}.rs"
 - whisper.cpp при поиске CoreML-файла стрипает `-qN_N` суффикс → ожидает `ggml-large-v3-turbo-encoder.mlmodelc` (без `-q5_0`)
 - Metal и CoreML активируются через feature flags `whisper-rs = { features = ["metal", "coreml"] }`
 
+## Qwen 3-4B Instruct (саммарайзер)
+
+- **Модель:** `mlx-community/Qwen3-4B-Instruct-2507-4bit` (~2.3 ГБ), через `mlx_lm.generate` Python-модуль.
+- **Cache:** `paths::qwen_cache_dir(app)` (тот же HF_HOME, что у Qwen ASR).
+- **Python:** standalone cpython 3.12.13 от `astral-sh/python-build-standalone`, качается приложением при первом нажатии «Установить окружение». URL и SHA256 захардкожены в `summarizer_qwen3.rs::STANDALONE_PYTHON_URL/SHA256`. Для апдейта версии: pick новый tag в `https://github.com/astral-sh/python-build-standalone/releases`, возьми SHA256 из `SHA256SUMS` того же релиза, замени **обе** константы вместе.
+- **Venv:** `paths::qwen_env_dir` (`…/Application Support/com.alexk.parrot/.qwen-mlx/venv/`), создаётся через standalone Python; ставится только `mlx-lm>=0.24.0` (минимальная зависимость для саммари).
+- **Команда:** `setup_summarizer_env` Tauri IPC → `summarizer_qwen3::install_env` (идемпотентная). События прогресса — `summary_env:progress` со строками.
+
 ## Qwen3-ASR 0.6B / 1.7B MLX
 
 - **Модели:** `Qwen/Qwen3-ASR-1.7B` и `Qwen/Qwen3-ASR-0.6B` на HuggingFace (MLX-порт, нативно на Apple Silicon).
