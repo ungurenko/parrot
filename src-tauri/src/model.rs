@@ -10,6 +10,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use crate::cancellation::CancelToken;
+
 #[derive(Clone, Serialize)]
 struct ModelProgressDetail {
     percent: u32,
@@ -29,27 +31,34 @@ const WHISPER_MAIN_MIN_BYTES: u64 = 100 * 1024 * 1024;
 const PARAKEET_BASE: &str =
     "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
 
-pub async fn download_whisper(app: AppHandle, main_dest: &Path, coreml_dest: &Path) -> Result<()> {
+pub async fn download_whisper(
+    app: AppHandle,
+    main_dest: &Path,
+    coreml_dest: &Path,
+    cancel: &CancelToken,
+) -> Result<()> {
     if let Some(parent) = main_dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
     if !file_len_at_least(main_dest, WHISPER_MAIN_MIN_BYTES) {
         let _ = tokio::fs::remove_file(main_dest).await;
-        download_with_progress(&app, WHISPER_MAIN_URL, main_dest, 0, 80).await?;
+        download_with_progress(&app, WHISPER_MAIN_URL, main_dest, 0, 80, cancel).await?;
     } else {
         let _ = app.emit("model:progress", 80u32);
     }
 
+    ensure_not_cancelled(cancel)?;
     if !dir_has_content(coreml_dest) {
         let _ = tokio::fs::remove_dir_all(coreml_dest).await;
         let models_dir = coreml_dest
             .parent()
             .ok_or_else(|| anyhow!("no parent for coreml path"))?;
         let zip_path = models_dir.join("coreml-encoder.zip");
-        download_with_progress(&app, WHISPER_COREML_URL, &zip_path, 80, 98).await?;
+        download_with_progress(&app, WHISPER_COREML_URL, &zip_path, 80, 98, cancel).await?;
 
-        let status = Command::new("unzip")
+        ensure_not_cancelled(cancel)?;
+        let mut child = Command::new("unzip")
             .arg("-o")
             .arg("-q")
             .arg(&zip_path)
@@ -57,10 +66,17 @@ pub async fn download_whisper(app: AppHandle, main_dest: &Path, coreml_dest: &Pa
             .arg(models_dir)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .spawn()?
-            .wait()
-            .await?;
+            .spawn()?;
+        let pid = child.id();
+        if let Some(pid) = pid {
+            cancel.register_pid(pid);
+        }
+        let status = child.wait().await?;
+        if let Some(pid) = pid {
+            cancel.unregister_pid(pid);
+        }
         if !status.success() {
+            ensure_not_cancelled(cancel)?;
             return Err(anyhow!("unzip failed with status {:?}", status.code()));
         }
         let _ = tokio::fs::remove_file(&zip_path).await;
@@ -70,7 +86,7 @@ pub async fn download_whisper(app: AppHandle, main_dest: &Path, coreml_dest: &Pa
     Ok(())
 }
 
-pub async fn download_parakeet(app: AppHandle, dir: &Path) -> Result<()> {
+pub async fn download_parakeet(app: AppHandle, dir: &Path, cancel: &CancelToken) -> Result<()> {
     tokio::fs::create_dir_all(dir).await?;
 
     // Download int8 variant — ~3× smaller than fp32 and ~2× faster inference.
@@ -82,6 +98,7 @@ pub async fn download_parakeet(app: AppHandle, dir: &Path) -> Result<()> {
     ];
 
     for (name, min_bytes, start, end) in files {
+        ensure_not_cancelled(cancel)?;
         let dest = dir.join(name);
         if file_len_at_least(&dest, min_bytes) {
             let _ = app.emit("model:progress", end);
@@ -89,7 +106,7 @@ pub async fn download_parakeet(app: AppHandle, dir: &Path) -> Result<()> {
         }
         let _ = tokio::fs::remove_file(&dest).await;
         let url = format!("{PARAKEET_BASE}/{name}");
-        download_with_progress(&app, &url, &dest, start, end).await?;
+        download_with_progress(&app, &url, &dest, start, end, cancel).await?;
     }
 
     let _ = app.emit("model:progress", 100u32);
@@ -102,7 +119,9 @@ async fn download_with_progress(
     dest: &Path,
     percent_start: u32,
     percent_end: u32,
+    cancel: &CancelToken,
 ) -> Result<()> {
+    ensure_not_cancelled(cancel)?;
     let tmp = dest.with_extension("part");
     let client = reqwest::Client::builder()
         .user_agent("parrot/0.1")
@@ -153,6 +172,7 @@ async fn download_with_progress(
     emit_download_progress(app, percent_start, downloaded, total, 0);
 
     while let Some(chunk) = stream.next().await {
+        ensure_not_cancelled(cancel)?;
         let bytes = chunk.map_err(|e| anyhow!(e))?;
         file.write_all(&bytes).await?;
         downloaded = downloaded.saturating_add(bytes.len() as u64);
@@ -174,6 +194,13 @@ async fn download_with_progress(
     drop(file);
     tokio::fs::rename(&tmp, dest).await?;
     emit_download_progress(app, percent_end, total.max(downloaded), total, 0);
+    Ok(())
+}
+
+fn ensure_not_cancelled(cancel: &CancelToken) -> Result<()> {
+    if cancel.is_cancelled() {
+        anyhow::bail!("cancelled");
+    }
     Ok(())
 }
 

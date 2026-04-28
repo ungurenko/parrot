@@ -22,6 +22,7 @@ const SERVER_HOST: &str = "127.0.0.1";
 const SERVER_API_KEY: &str = "parrot-local-qwen";
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(90);
 const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const READY_MARKER_PREFIX: &str = ".parrot-ready";
 
 /// Expected cache size per model (safetensors + tokenizer + config).
 /// Used to detect incomplete downloads.
@@ -69,7 +70,7 @@ pub fn model_for_engine(engine: &str) -> Option<&'static str> {
 }
 
 pub fn is_ready(app: &AppHandle, engine: &str) -> bool {
-    resolve_cli().is_ok() && model_cache_exists(app, engine)
+    resolve_cli().is_ok() && model_cache_ready(app, engine)
 }
 
 pub fn unavailable_reason() -> Option<String> {
@@ -83,7 +84,7 @@ pub fn unavailable_reason() -> Option<String> {
     }
 }
 
-pub fn warmup_model(app: &AppHandle, engine: &str) -> Result<()> {
+pub fn warmup_model(app: &AppHandle, engine: &str, cancel: Arc<CancelToken>) -> Result<()> {
     let model =
         model_for_engine(engine).ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
     let cli = resolve_cli()?;
@@ -92,23 +93,41 @@ pub fn warmup_model(app: &AppHandle, engine: &str) -> Result<()> {
     let warmup_wav = tmp.join(format!("qwen-warmup-{}.wav", engine.replace('.', "-")));
 
     write_silent_wav(&warmup_wav)?;
-    let output = qwen_command(&cli, &cache_dir)
+    if cancel.is_cancelled() {
+        anyhow::bail!("cancelled");
+    }
+    let child = qwen_command(&cli, &cache_dir)
         .arg(&warmup_wav)
         .arg("--model")
         .arg(model)
         .arg("--stdout-only")
         .arg("--no-progress")
-        .output();
+        .spawn();
+    let child = match child {
+        Ok(child) => child,
+        Err(e) => {
+            let _ = std::fs::remove_file(&warmup_wav);
+            return Err(e.into());
+        }
+    };
+    let pid = child.id();
+    cancel.register_pid(pid);
+    let output = child.wait_with_output();
+    cancel.unregister_pid(pid);
     let _ = std::fs::remove_file(&warmup_wav);
 
     let output = output?;
     if !output.status.success() {
+        if cancel.is_cancelled() {
+            anyhow::bail!("cancelled");
+        }
         return Err(command_error(
             "Qwen MLX не смог подготовить модель",
             &output.stderr,
             output.status.code(),
         ));
     }
+    write_ready_marker(&cache_dir, engine)?;
     Ok(())
 }
 
@@ -119,6 +138,12 @@ pub fn preload_server(app: &AppHandle, engine: &str) -> Result<()> {
 pub fn stop_server() {
     if let Some(mut server) = SERVER.lock().take() {
         server.stop();
+    }
+}
+
+pub fn clear_ready_marker(app: &AppHandle, engine: &str) {
+    if let Ok(cache_dir) = paths::qwen_cache_dir(app) {
+        remove_ready_marker(&cache_dir, engine);
     }
 }
 
@@ -351,11 +376,15 @@ fn find_free_port() -> Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
-fn model_cache_exists(app: &AppHandle, engine: &str) -> bool {
-    let Some(model) = model_for_engine(engine) else {
+fn model_cache_ready(app: &AppHandle, engine: &str) -> bool {
+    let Ok(cache_dir) = paths::qwen_cache_dir(app) else {
         return false;
     };
-    let Ok(cache_dir) = paths::qwen_cache_dir(app) else {
+    model_cache_exists_in(&cache_dir, engine) && ready_marker_exists(&cache_dir, engine)
+}
+
+fn model_cache_exists_in(cache_dir: &Path, engine: &str) -> bool {
+    let Some(model) = model_for_engine(engine) else {
         return false;
     };
     let repo_cache_name = format!("models--{}", model.replace('/', "--"));
@@ -370,6 +399,34 @@ fn model_cache_exists(app: &AppHandle, engine: &str) -> bool {
         _ => return false,
     };
     dir_size(&model_dir) >= (expected as f64 * 0.9) as u64
+}
+
+fn write_ready_marker(cache_dir: &Path, engine: &str) -> Result<()> {
+    let path = ready_marker_path(cache_dir, engine)?;
+    std::fs::write(path, b"ok")?;
+    Ok(())
+}
+
+fn remove_ready_marker(cache_dir: &Path, engine: &str) {
+    if let Ok(path) = ready_marker_path(cache_dir, engine) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn ready_marker_exists(cache_dir: &Path, engine: &str) -> bool {
+    ready_marker_path(cache_dir, engine)
+        .map(|path| path.is_file())
+        .unwrap_or(false)
+}
+
+fn ready_marker_path(cache_dir: &Path, engine: &str) -> Result<PathBuf> {
+    if !is_qwen_engine(engine) {
+        anyhow::bail!("unknown Qwen MLX engine: {engine}");
+    }
+    Ok(cache_dir.join(format!(
+        "{READY_MARKER_PREFIX}-{}",
+        engine.replace('.', "-")
+    )))
 }
 
 fn dir_size(path: &Path) -> u64 {
@@ -494,4 +551,34 @@ fn write_silent_wav(path: &Path) -> Result<()> {
     }
     writer.finalize()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "parrot-qwen-ready-test-{}-{}",
+            name,
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn ready_marker_is_engine_scoped() {
+        let dir = temp_dir("marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        assert!(!ready_marker_exists(&dir, ENGINE_QWEN_0_6B));
+        write_ready_marker(&dir, ENGINE_QWEN_0_6B).expect("write marker");
+
+        assert!(ready_marker_exists(&dir, ENGINE_QWEN_0_6B));
+        assert!(!ready_marker_exists(&dir, ENGINE_QWEN_1_7B));
+
+        remove_ready_marker(&dir, ENGINE_QWEN_0_6B);
+        assert!(!ready_marker_exists(&dir, ENGINE_QWEN_0_6B));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

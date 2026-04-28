@@ -26,6 +26,7 @@ const STANDALONE_PYTHON_BYTES: u64 = 17_836_558;
 
 pub const SUMMARY_MODEL_REPO: &str = "mlx-community/Qwen3-4B-Instruct-2507-4bit";
 pub const EXPECTED_SUMMARY_BYTES: u64 = 2_300_000_000;
+const READY_MARKER: &str = ".parrot-ready-summary";
 
 const SUMMARY_MAX_TOKENS: &str = "4096";
 const SUMMARY_TEMP: &str = "0.3";
@@ -60,6 +61,13 @@ pub fn model_cache_exists(app: &AppHandle) -> bool {
     let Ok(cache_dir) = paths::qwen_cache_dir(app) else {
         return false;
     };
+    if !ready_marker_exists(&cache_dir) {
+        return false;
+    }
+    model_cache_exists_in(&cache_dir)
+}
+
+fn model_cache_exists_in(cache_dir: &Path) -> bool {
     let repo_cache_name = format!("models--{}", SUMMARY_MODEL_REPO.replace('/', "--"));
     let model_dir = cache_dir.join("hub").join(repo_cache_name);
     if !model_dir.exists() {
@@ -70,6 +78,7 @@ pub fn model_cache_exists(app: &AppHandle) -> bool {
 
 pub fn delete_model(app: &AppHandle) -> Result<()> {
     let cache_dir = paths::qwen_cache_dir(app)?;
+    remove_ready_marker(&cache_dir);
     let repo_cache_name = format!("models--{}", SUMMARY_MODEL_REPO.replace('/', "--"));
     let model_dir = cache_dir.join("hub").join(repo_cache_name);
     if model_dir.is_dir() {
@@ -79,10 +88,13 @@ pub fn delete_model(app: &AppHandle) -> Result<()> {
 }
 
 /// Download the model weights by running a short generation that triggers HF download.
-pub fn warmup_model(app: &AppHandle) -> Result<()> {
+pub fn warmup_model(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<()> {
     let python = resolve_python(app)?;
     let cache_dir = paths::qwen_cache_dir(app)?;
 
+    if cancel.is_cancelled() {
+        anyhow::bail!("cancelled");
+    }
     let child = mlx_lm_command(&python, &cache_dir)
         .arg("generate")
         .arg("--model")
@@ -96,14 +108,21 @@ pub fn warmup_model(app: &AppHandle) -> Result<()> {
         .stdin(Stdio::null())
         .spawn()?;
 
+    let pid = child.id();
+    cancel.register_pid(pid);
     let output = child.wait_with_output()?;
+    cancel.unregister_pid(pid);
     if !output.status.success() {
+        if cancel.is_cancelled() {
+            anyhow::bail!("cancelled");
+        }
         return Err(command_error(
             "Не удалось подготовить модель конспекта",
             &output.stderr,
             output.status.code(),
         ));
     }
+    write_ready_marker(&cache_dir)?;
     Ok(())
 }
 
@@ -415,7 +434,13 @@ pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -
     // Step 3 — install mlx-lm (the only Python dep the summarizer needs).
     on_progress("Устанавливаю mlx-lm (~50 МБ)…");
     let out = Command::new(&venv_python)
-        .args(["-m", "pip", "install", "--disable-pip-version-check", "mlx-lm>=0.24.0"])
+        .args([
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "mlx-lm>=0.24.0",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -468,6 +493,19 @@ fn dir_size(path: &Path) -> u64 {
     total
 }
 
+fn write_ready_marker(cache_dir: &Path) -> Result<()> {
+    std::fs::write(cache_dir.join(READY_MARKER), b"ok")?;
+    Ok(())
+}
+
+fn remove_ready_marker(cache_dir: &Path) {
+    let _ = std::fs::remove_file(cache_dir.join(READY_MARKER));
+}
+
+fn ready_marker_exists(cache_dir: &Path) -> bool {
+    cache_dir.join(READY_MARKER).is_file()
+}
+
 fn command_error(prefix: &str, stderr: &[u8], code: Option<i32>) -> anyhow::Error {
     let tail = String::from_utf8_lossy(stderr)
         .lines()
@@ -482,5 +520,33 @@ fn command_error(prefix: &str, stderr: &[u8], code: Option<i32>) -> anyhow::Erro
         anyhow!("{prefix}. Код завершения: {code:?}")
     } else {
         anyhow!("{prefix}: {}", tail.trim())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "parrot-summary-ready-test-{}-{}",
+            name,
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn ready_marker_controls_summary_readiness() {
+        let dir = temp_dir("marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        assert!(!ready_marker_exists(&dir));
+        write_ready_marker(&dir).expect("write marker");
+        assert!(ready_marker_exists(&dir));
+        remove_ready_marker(&dir);
+        assert!(!ready_marker_exists(&dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

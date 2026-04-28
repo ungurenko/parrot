@@ -17,6 +17,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -27,7 +29,10 @@ use settings::Settings;
 pub struct AppState {
     queue: Arc<JobQueue>,
     summary_cancel: CancelRegistry,
+    model_cancel: CancelRegistry,
 }
+
+static PRELOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -190,28 +195,43 @@ fn is_model_ready_for_engine(app: &AppHandle, engine: &str) -> bool {
 }
 
 #[tauri::command]
-async fn download_model(app: AppHandle) -> Result<(), String> {
+async fn download_model(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let engine = settings::load(&app).engine;
-    download_model_for_engine(app, engine).await
+    download_model_for_engine(app, state, engine).await
 }
 
 #[tauri::command]
-async fn download_model_for_engine(app: AppHandle, engine: String) -> Result<(), String> {
-    download_model_inner(app, &engine).await
+async fn download_model_for_engine(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    engine: String,
+) -> Result<(), String> {
+    let task_id = format!("model:{engine}");
+    let token = state
+        .model_cancel
+        .try_create(&task_id)
+        .ok_or_else(|| "Эта модель уже подготавливается".to_string())?;
+    let result = download_model_inner(app, &engine, token).await;
+    state.model_cancel.remove(&task_id);
+    result
 }
 
-async fn download_model_inner(app: AppHandle, engine: &str) -> Result<(), String> {
+async fn download_model_inner(
+    app: AppHandle,
+    engine: &str,
+    token: Arc<cancellation::CancelToken>,
+) -> Result<(), String> {
     match engine {
         "parakeet" => {
             let dir = paths::parakeet_dir(&app).map_err(|e| e.to_string())?;
-            model::download_parakeet(app.clone(), &dir)
+            model::download_parakeet(app.clone(), &dir, &token)
                 .await
                 .map_err(|e| e.to_string())?;
         }
         "whisper" => {
             let main = paths::model_path(&app).map_err(|e| e.to_string())?;
             let coreml = paths::coreml_encoder_path(&app).map_err(|e| e.to_string())?;
-            model::download_whisper(app.clone(), &main, &coreml)
+            model::download_whisper(app.clone(), &main, &coreml, &token)
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -254,7 +274,7 @@ async fn download_model_inner(app: AppHandle, engine: &str) -> Result<(), String
             });
 
             let result = tauri::async_runtime::spawn_blocking(move || {
-                transcriber_qwen::warmup_model(&app_for_task, &engine_str)
+                transcriber_qwen::warmup_model(&app_for_task, &engine_str, token)
             })
             .await;
             poll_handle.abort();
@@ -303,6 +323,7 @@ fn delete_model_files(app: &AppHandle, engine: &str) -> Result<(), String> {
         }
         engine if transcriber_qwen::is_qwen_engine(engine) => {
             transcriber_qwen::stop_server();
+            transcriber_qwen::clear_ready_marker(app, engine);
             let model = transcriber_qwen::model_for_engine(engine)
                 .ok_or_else(|| format!("Неизвестная Qwen-модель: {engine}"))?;
             let cache_dir = paths::qwen_cache_dir(app).map_err(|e| e.to_string())?;
@@ -353,17 +374,121 @@ struct LoadedHistoryEntry {
 #[tauri::command]
 fn load_history_entry(id: String, app: AppHandle) -> Result<LoadedHistoryEntry, String> {
     let entry = history::get(&app, &id).ok_or_else(|| "Запись не найдена".to_string())?;
-    let text = std::fs::read_to_string(&entry.output_path)
+    let transcript_path =
+        validate_saved_file_path(&app, &entry.output_path, SavedFileKind::Transcript)?;
+    let text = std::fs::read_to_string(&transcript_path)
         .map_err(|e| format!("Не удалось прочитать транскрипт: {e}"))?;
     let summary = entry
         .summary_path
         .as_ref()
+        .and_then(|p| validate_saved_file_path(&app, p, SavedFileKind::Summary).ok())
         .and_then(|p| std::fs::read_to_string(p).ok());
     Ok(LoadedHistoryEntry {
         entry,
         text,
         summary,
     })
+}
+
+#[derive(Clone, Copy)]
+enum SavedFileKind {
+    Transcript,
+    Summary,
+}
+
+fn validate_saved_file_path(
+    app: &AppHandle,
+    raw_path: &str,
+    kind: SavedFileKind,
+) -> Result<PathBuf, String> {
+    let path = PathBuf::from(raw_path);
+    if !saved_file_kind_matches(&path, kind) {
+        return Err("Неподдерживаемый тип файла".to_string());
+    }
+    let canonical_file = path
+        .canonicalize()
+        .map_err(|e| format!("Файл недоступен: {e}"))?;
+    if !canonical_file.is_file() {
+        return Err("Путь должен указывать на файл".to_string());
+    }
+    let allowed_dirs = allowed_saved_file_dirs(app);
+    if allowed_dirs
+        .iter()
+        .all(|dir| !path_is_inside_dir(&canonical_file, dir))
+    {
+        return Err("Файл должен находиться в папке сохранения".to_string());
+    }
+    Ok(canonical_file)
+}
+
+fn allowed_saved_file_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for dir in [settings::load(app).save_dir, paths::default_save_dir()] {
+        if let Ok(canonical) = dir.canonicalize() {
+            if !dirs.contains(&canonical) {
+                dirs.push(canonical);
+            }
+        }
+    }
+    dirs
+}
+
+fn saved_file_kind_matches(path: &Path, kind: SavedFileKind) -> bool {
+    match kind {
+        SavedFileKind::Transcript => {
+            path.extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("txt"))
+                == Some(true)
+        }
+        SavedFileKind::Summary => {
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.ends_with(".summary.md"))
+                == Some(true)
+        }
+    }
+}
+
+fn path_is_inside_dir(path: &Path, dir: &Path) -> bool {
+    path.starts_with(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_file_kind_should_accept_only_expected_outputs() {
+        assert!(saved_file_kind_matches(
+            Path::new("/tmp/audio.txt"),
+            SavedFileKind::Transcript
+        ));
+        assert!(saved_file_kind_matches(
+            Path::new("/tmp/audio.summary.md"),
+            SavedFileKind::Summary
+        ));
+        assert!(!saved_file_kind_matches(
+            Path::new("/tmp/audio.md"),
+            SavedFileKind::Summary
+        ));
+        assert!(!saved_file_kind_matches(
+            Path::new("/tmp/audio.summary.md"),
+            SavedFileKind::Transcript
+        ));
+    }
+
+    #[test]
+    fn path_is_inside_dir_should_reject_siblings() {
+        assert!(path_is_inside_dir(
+            Path::new("/Users/alex/Documents/Transcripts/a.txt"),
+            Path::new("/Users/alex/Documents/Transcripts")
+        ));
+        assert!(!path_is_inside_dir(
+            Path::new("/Users/alex/Documents/Transcripts-old/a.txt"),
+            Path::new("/Users/alex/Documents/Transcripts")
+        ));
+    }
 }
 
 #[tauri::command]
@@ -386,7 +511,15 @@ async fn setup_summarizer_env(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn download_summarizer_model(app: AppHandle) -> Result<(), String> {
+async fn download_summarizer_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let task_id = "model:summary".to_string();
+    let token = state
+        .model_cancel
+        .try_create(&task_id)
+        .ok_or_else(|| "Модель конспекта уже подготавливается".to_string())?;
     let _ = app.emit("summary_model:progress", 1u32);
     let _ = app.emit("summary_model:stage", "downloading");
 
@@ -417,13 +550,18 @@ async fn download_summarizer_model(app: AppHandle) -> Result<(), String> {
     });
 
     let app_for_task = app.clone();
-    let result =
-        tauri::async_runtime::spawn_blocking(move || summarizer_qwen3::warmup_model(&app_for_task))
-            .await;
+    let token_for_task = token.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        summarizer_qwen3::warmup_model(&app_for_task, token_for_task)
+    })
+    .await;
     poll_handle.abort();
-    result
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+    let result = match result {
+        Ok(inner) => inner.map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    state.model_cancel.remove(&task_id);
+    result?;
     let _ = app.emit("summary_model:stage", "ready");
     let _ = app.emit("summary_model:progress", 100u32);
     Ok(())
@@ -460,12 +598,7 @@ async fn summarize(
     // Validate transcript_path: must be a .txt file inside save_dir (hardening
     // against a frontend or IPC caller pointing at an arbitrary filesystem path).
     let transcript_path_buf = PathBuf::from(&transcript_path);
-    if transcript_path_buf
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.eq_ignore_ascii_case("txt"))
-        != Some(true)
-    {
+    if !saved_file_kind_matches(&transcript_path_buf, SavedFileKind::Transcript) {
         return Err("Путь транскрипта должен указывать на .txt".to_string());
     }
     let save_dir = settings::load(&app).save_dir;
@@ -473,7 +606,7 @@ async fn summarize(
     let canonical_transcript = transcript_path_buf
         .canonicalize()
         .map_err(|e| format!("Файл транскрипта недоступен: {e}"))?;
-    if !canonical_transcript.starts_with(&canonical_save) {
+    if !path_is_inside_dir(&canonical_transcript, &canonical_save) {
         return Err("Транскрипт должен находиться в папке сохранения".to_string());
     }
 
@@ -600,10 +733,16 @@ async fn summarize(
 }
 
 #[tauri::command]
-fn open_in_finder(path: String) -> Result<(), String> {
+fn open_in_finder(path: String, app: AppHandle) -> Result<(), String> {
+    let kind = if saved_file_kind_matches(Path::new(&path), SavedFileKind::Transcript) {
+        SavedFileKind::Transcript
+    } else {
+        SavedFileKind::Summary
+    };
+    let path = validate_saved_file_path(&app, &path, kind)?;
     std::process::Command::new("open")
         .arg("-R")
-        .arg(&path)
+        .arg(path)
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -645,6 +784,7 @@ fn dir_size_bytes(path: &std::path::Path) -> u64 {
 
 fn preload_active_engine(handle: AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = PRELOAD_LOCK.lock();
         let s = settings::load(&handle);
         match s.engine.as_str() {
             "parakeet" => {
@@ -733,10 +873,13 @@ pub fn run() {
 
             let queue = JobQueue::start(handle.clone());
             let summary_cancel = CancelRegistry::new();
+            let model_cancel = CancelRegistry::new();
             let summary_cancel_for_close = summary_cancel.clone();
+            let model_cancel_for_close = model_cancel.clone();
             app.manage(AppState {
                 queue,
                 summary_cancel,
+                model_cancel,
             });
 
             if let Some(win) = app.get_webview_window("main") {
@@ -747,6 +890,7 @@ pub fn run() {
                         // Kill any running mlx-lm summarization subprocess so we
                         // don't leave a zombie Python process after window close.
                         summary_cancel_for_close.cancel_all();
+                        model_cancel_for_close.cancel_all();
                     }
                 });
             }

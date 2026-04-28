@@ -8,7 +8,7 @@ pub struct CancelToken {
 }
 
 impl CancelToken {
-    fn new() -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
         Arc::new(Self {
             flag: AtomicBool::new(false),
             pids: Mutex::new(Vec::new()),
@@ -109,5 +109,21 @@ impl CancelRegistry {
 
     pub fn remove(&self, id: &str) {
         self.inner.lock().unwrap().remove(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_create_should_reject_duplicate_active_token() {
+        let registry = CancelRegistry::new();
+
+        assert!(registry.try_create("model:parakeet").is_some());
+        assert!(registry.try_create("model:parakeet").is_none());
+
+        registry.remove("model:parakeet");
+        assert!(registry.try_create("model:parakeet").is_some());
     }
 }

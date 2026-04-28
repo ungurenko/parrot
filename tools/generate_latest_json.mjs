@@ -6,6 +6,7 @@ const root = resolve(import.meta.dirname, "..");
 const tauriConfigPath = resolve(root, "src-tauri/tauri.conf.json");
 const dmgDir = resolve(root, "src-tauri/target/release/bundle/dmg");
 const bundleDir = resolve(root, "src-tauri/target/release/bundle/macos");
+const releaseNotesPath = resolve(root, "docs/release-notes.md");
 const signaturePath = resolve(bundleDir, "Parrot.app.tar.gz.sig");
 const archivePath = resolve(bundleDir, "Parrot.app.tar.gz");
 const outputPath = resolve(bundleDir, "latest.json");
@@ -13,6 +14,14 @@ const outputPath = resolve(bundleDir, "latest.json");
 const tauriConfig = JSON.parse(await readFile(tauriConfigPath, "utf8"));
 const version = tauriConfig.version;
 const signature = (await readFile(signaturePath, "utf8")).trim();
+const notes = (
+  process.env.PARROT_RELEASE_NOTES ?? (await readFile(releaseNotesPath, "utf8"))
+).trim();
+if (!notes) {
+  throw new Error(
+    "Release notes are empty. Set PARROT_RELEASE_NOTES or edit docs/release-notes.md.",
+  );
+}
 const versionedDmgPath = resolve(dmgDir, `Parrot_${version}_aarch64.dmg`);
 const latestDmgPath = resolve(dmgDir, "Parrot.dmg");
 const [archiveStat, signatureStat] = await Promise.all([
@@ -26,7 +35,7 @@ if (signatureStat.mtimeMs + 1000 < archiveStat.mtimeMs) {
 
 const latest = {
   version,
-  notes: "Добавлен локальный LLM-конспект на базе Qwen 3-4B Instruct MLX (оффлайн, ~2.3 ГБ). Новая секция «История» на главной: все прошлые транскрипции в один клик, сохраняются между сеансами. Увеличен шрифт для читаемости, усилена отмена фоновых процессов при закрытии окна.",
+  notes,
   pub_date: new Date().toISOString(),
   platforms: {
     "darwin-aarch64": {
