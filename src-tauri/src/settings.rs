@@ -7,6 +7,7 @@ use crate::paths;
 
 pub const DEFAULT_ENGINE: &str = "parakeet";
 pub const DEFAULT_LANGUAGE: &str = "auto";
+pub const DEFAULT_DICTATION_SHORTCUT: &str = "Alt+Space";
 pub const SUPPORTED_ENGINES: [&str; 4] = ["parakeet", "qwen-0.6b", "qwen-1.7b", "whisper"];
 pub const SUPPORTED_LANGUAGES: [&str; 9] = ["auto", "ru", "en", "de", "fr", "es", "it", "pt", "uk"];
 
@@ -22,6 +23,10 @@ pub struct Settings {
     pub summarizer_enabled: bool,
     #[serde(default)]
     pub summarizer_promo_seen: bool,
+    #[serde(default = "default_dictation_enabled")]
+    pub dictation_enabled: bool,
+    #[serde(default = "default_dictation_hold_key")]
+    pub dictation_hold_key: String,
 }
 
 fn default_engine() -> String {
@@ -30,6 +35,14 @@ fn default_engine() -> String {
 
 fn default_language() -> String {
     DEFAULT_LANGUAGE.to_string()
+}
+
+fn default_dictation_enabled() -> bool {
+    true
+}
+
+fn default_dictation_hold_key() -> String {
+    DEFAULT_DICTATION_SHORTCUT.to_string()
 }
 
 impl Default for Settings {
@@ -41,6 +54,8 @@ impl Default for Settings {
             language: default_language(),
             summarizer_enabled: false,
             summarizer_promo_seen: false,
+            dictation_enabled: default_dictation_enabled(),
+            dictation_hold_key: default_dictation_hold_key(),
         }
     }
 }
@@ -55,6 +70,9 @@ impl Settings {
         }
         if !is_supported_language(&self.language) {
             self.language = default_language();
+        }
+        if !is_valid_dictation_shortcut(&self.dictation_hold_key) {
+            self.dictation_hold_key = default_dictation_hold_key();
         }
         self
     }
@@ -81,7 +99,37 @@ pub fn validate_for_save(settings: &Settings) -> Result<()> {
     if !is_supported_language(&settings.language) {
         anyhow::bail!("Неизвестный язык аудио: {}", settings.language);
     }
+    if !is_valid_dictation_shortcut(&settings.dictation_hold_key) {
+        anyhow::bail!("Некорректное сочетание клавиш для диктовки.");
+    }
     Ok(())
+}
+
+fn is_valid_dictation_shortcut(shortcut: &str) -> bool {
+    let parts: Vec<&str> = shortcut
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.len() < 2 {
+        return false;
+    }
+    let Some(key) = parts.last() else {
+        return false;
+    };
+    if is_modifier_key(key) {
+        return false;
+    }
+    parts[..parts.len() - 1]
+        .iter()
+        .any(|part| is_modifier_key(part))
+}
+
+fn is_modifier_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "alt" | "option" | "control" | "ctrl" | "command" | "cmd" | "shift" | "super"
+    )
 }
 
 pub fn load(app: &AppHandle) -> Settings {
@@ -125,11 +173,14 @@ mod tests {
             language: "bad-language".to_string(),
             summarizer_enabled: false,
             summarizer_promo_seen: false,
+            dictation_enabled: true,
+            dictation_hold_key: "bad-key".to_string(),
         }
         .normalized();
 
         assert_eq!(settings.engine, DEFAULT_ENGINE);
         assert_eq!(settings.language, DEFAULT_LANGUAGE);
+        assert_eq!(settings.dictation_hold_key, DEFAULT_DICTATION_SHORTCUT);
         assert!(!settings.save_dir.as_os_str().is_empty());
     }
 

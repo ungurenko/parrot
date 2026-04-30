@@ -87,12 +87,25 @@ export interface Settings {
   language: TranscriptLanguage;
   summarizer_enabled: boolean;
   summarizer_promo_seen: boolean;
+  dictation_enabled: boolean;
+  dictation_hold_key: string;
 }
 
 export interface SummarizerStatus {
   available: boolean;
   modelReady: boolean;
   unavailableReason?: string | null;
+}
+
+export type DictationPhase = "idle" | "recording" | "processing" | "error";
+
+export interface DictationStatus {
+  enabled: boolean;
+  holdKey: string;
+  phase: DictationPhase;
+  listenerStarted: boolean;
+  registeredShortcut?: string | null;
+  lastError?: string | null;
 }
 
 export const SUMMARIZER_MODEL_LABEL = "Qwen 3-4B Instruct (конспект)";

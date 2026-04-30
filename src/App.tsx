@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import parrotImg from "/parrot.png";
 import { EmptyState } from "./components/EmptyState";
@@ -14,7 +15,13 @@ import { useJobEvents } from "./hooks/useJobEvents";
 import { useHistory } from "./hooks/useHistory";
 import { useAutoUpdate } from "./hooks/useAutoUpdate";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { ENGINE_LABEL, type Job, type Settings } from "./types";
+import {
+  ENGINE_LABEL,
+  type DictationPhase,
+  type DictationStatus,
+  type Job,
+  type Settings,
+} from "./types";
 
 type ViewState =
   | { kind: "empty" }
@@ -46,12 +53,22 @@ function pickView(jobs: Job[], selectedId: string | null): ViewState {
   return { kind: "empty" };
 }
 
+function displayShortcut(shortcut: string): string {
+  return shortcut
+    .split("+")
+    .map((part) => (part.trim() === "Alt" ? "Option" : part.trim()))
+    .join("+");
+}
+
 function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [dictationPhase, setDictationPhase] = useState<DictationPhase | "done">(
+    "idle",
+  );
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const { history, deleteEntry, loadEntry } = useHistory();
   const updater = useAutoUpdate();
@@ -67,8 +84,39 @@ function App() {
       const s = await reloadSettings();
       const modelReady = await invoke<boolean>("is_model_ready");
       setNeedsOnboarding(!s.onboarded || !modelReady);
+      const dictation = await invoke<DictationStatus>("get_dictation_status");
+      setDictationPhase(dictation.phase);
     })();
   }, [reloadSettings]);
+
+  useEffect(() => {
+    let doneTimer: number | undefined;
+    const startedP = listen("dictation:started", () => {
+      window.clearTimeout(doneTimer);
+      setDictationPhase("recording");
+    });
+    const processingP = listen("dictation:processing", () => {
+      window.clearTimeout(doneTimer);
+      setDictationPhase("processing");
+    });
+    const doneP = listen<{ text: string }>("dictation:done", () => {
+      setDictationPhase("done");
+      toast.success("Текст скопирован");
+      doneTimer = window.setTimeout(() => setDictationPhase("idle"), 1800);
+    });
+    const errorP = listen<{ message: string }>("dictation:error", (e) => {
+      window.clearTimeout(doneTimer);
+      setDictationPhase("error");
+      toast.error("Диктовка не сработала", { description: e.payload.message });
+    });
+    return () => {
+      window.clearTimeout(doneTimer);
+      startedP.then((u) => u());
+      processingP.then((u) => u());
+      doneP.then((u) => u());
+      errorP.then((u) => u());
+    };
+  }, []);
 
   useJobEvents(
     setJobs,
@@ -150,6 +198,22 @@ function App() {
 
   const engineLabel = settings ? ENGINE_LABEL[settings.engine] : undefined;
   const showQueue = jobs.length > 1;
+  const dictationLabel =
+    dictationPhase === "recording"
+      ? "Запись"
+      : dictationPhase === "processing"
+        ? "Распознаю"
+        : dictationPhase === "done"
+          ? "Скопировано"
+          : dictationPhase === "error"
+            ? "Ошибка диктовки"
+            : displayShortcut(settings?.dictation_hold_key ?? "Alt+Space");
+  const dictationLed =
+    dictationPhase === "recording" || dictationPhase === "processing"
+      ? "coral"
+      : dictationPhase === "idle"
+        ? "idle"
+        : "";
 
   return (
     <main className="app-shell flex h-full flex-col">
@@ -166,6 +230,15 @@ function App() {
           <h1 className="glass-title text-[13px]">Parrot</h1>
         </div>
         <div className="flex items-center gap-2">
+          {settings?.dictation_enabled && (
+            <span
+              className="pill"
+              title="Зажмите выбранное сочетание, скажите фразу, отпустите и вставьте через Cmd+V"
+            >
+              <span className={`led ${dictationLed}`} />
+              <span className="truncate">{dictationLabel}</span>
+            </span>
+          )}
           {settings && (
             <button
               type="button"

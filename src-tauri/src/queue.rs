@@ -516,7 +516,7 @@ async fn transcribe_prepared(
     Ok((text, out))
 }
 
-fn ensure_model_ready(app: &AppHandle, engine: &str) -> Result<()> {
+pub(crate) fn ensure_model_ready(app: &AppHandle, engine: &str) -> Result<()> {
     match engine {
         "parakeet" => {
             if !paths::parakeet_files_ready(app) {

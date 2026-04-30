@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -45,6 +45,44 @@ interface Props {
   updater: AutoUpdate;
 }
 
+function normalizeShortcutKey(key: string): string | null {
+  const lower = key.toLowerCase();
+  if (["meta", "alt", "control", "shift"].includes(lower)) return null;
+  if (lower === " ") return "Space";
+  if (lower === "escape") return "Escape";
+  if (lower === "enter" || lower === "return") return "Enter";
+  if (lower === "backspace") return "Backspace";
+  if (lower === "tab") return "Tab";
+  if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(key)) return key.toUpperCase();
+  if (key.length === 1) return key.toUpperCase();
+  return key;
+}
+
+function isModifierOnlyKey(key: string): boolean {
+  return ["meta", "alt", "control", "shift"].includes(key.toLowerCase());
+}
+
+function displayShortcut(shortcut: string): string {
+  return shortcut
+    .split("+")
+    .map((part) => (part.trim() === "Alt" ? "Option" : part.trim()))
+    .join("+");
+}
+
+function displayShortcutParts(shortcut: string): string[] {
+  return displayShortcut(shortcut)
+    .split("+")
+    .map((part) => {
+      const trimmed = part.trim();
+      if (trimmed === "Command") return "⌘";
+      if (trimmed === "Option") return "⌥ Option";
+      if (trimmed === "Control") return "⌃ Control";
+      if (trimmed === "Shift") return "⇧ Shift";
+      return trimmed;
+    })
+    .filter(Boolean);
+}
+
 export function SettingsModal({ onClose, updater }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [appVersion, setAppVersion] = useState("");
@@ -68,6 +106,8 @@ export function SettingsModal({ onClose, updater }: Props) {
   >("downloading");
   const [envSetupBusy, setEnvSetupBusy] = useState(false);
   const [envSetupStatus, setEnvSetupStatus] = useState<string | null>(null);
+  const [capturingShortcut, setCapturingShortcut] = useState(false);
+  const [shortcutHint, setShortcutHint] = useState<string | null>(null);
 
   const refreshModelStatuses = () =>
     invoke<EngineStatuses>("get_engine_statuses").then(setModelStatuses);
@@ -201,6 +241,71 @@ export function SettingsModal({ onClose, updater }: Props) {
     }
   };
 
+  const toggleDictation = async (enabled: boolean) => {
+    if (!settings) return;
+    const next = { ...settings, dictation_enabled: enabled };
+    try {
+      await invoke("set_settings", { new: next });
+      setSettings(next);
+      setModelError(null);
+    } catch (e: unknown) {
+      setModelError(String(e));
+    }
+  };
+
+  const changeDictationShortcut = async (shortcut: string) => {
+    if (!settings) return;
+    const next = {
+      ...settings,
+      dictation_enabled: true,
+      dictation_hold_key: shortcut,
+    };
+    try {
+      await invoke("set_settings", { new: next });
+      setSettings(next);
+      setModelError(null);
+      setShortcutHint(`Сочетание сохранено: ${displayShortcut(shortcut)}`);
+    } catch (e: unknown) {
+      setModelError(String(e));
+      setShortcutHint(null);
+    } finally {
+      setCapturingShortcut(false);
+    }
+  };
+
+  const captureDictationShortcut = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (!capturingShortcut) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const key = normalizeShortcutKey(e.key);
+    if (!key) {
+      if (isModifierOnlyKey(e.key)) {
+        setShortcutHint(
+          "Один Option пока нельзя выбрать: macOS считает его служебной клавишей. Используйте Option+Space или Command+Shift+Space.",
+        );
+      } else {
+        setShortcutHint("Нажмите обычную клавишу вместе с Command, Option, Control или Shift.");
+      }
+      return;
+    }
+
+    const modifiers = [
+      e.metaKey ? "Command" : null,
+      e.altKey ? "Alt" : null,
+      e.ctrlKey ? "Control" : null,
+      e.shiftKey ? "Shift" : null,
+    ].filter(Boolean) as string[];
+
+    if (modifiers.length === 0) {
+      setShortcutHint("Добавьте Command, Option, Control или Shift.");
+      return;
+    }
+
+    const shortcut = [...modifiers, key].join("+");
+    void changeDictationShortcut(shortcut);
+  };
+
   const setupSummarizerEnv = async () => {
     setEnvSetupBusy(true);
     setModelError(null);
@@ -320,6 +425,82 @@ export function SettingsModal({ onClose, updater }: Props) {
               </AlertDescription>
             </Alert>
           )}
+
+          <Field className="min-w-0">
+            <FieldLabel>Диктовка</FieldLabel>
+            <div className="dictation-card">
+              <div className="dictation-shortcut-row">
+                <div className="min-w-0">
+                  <div className="dictation-eyebrow">Клавиши для записи</div>
+                  <div
+                    className="dictation-key-row"
+                    aria-label={`Текущее сочетание: ${displayShortcut(settings.dictation_hold_key)}`}
+                  >
+                    {displayShortcutParts(settings.dictation_hold_key).map((part) => (
+                      <span className="dictation-key" key={part}>
+                        {part}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant={capturingShortcut ? "default" : "outline"}
+                  className="dictation-record-button"
+                  onClick={() => {
+                    setCapturingShortcut(true);
+                    setShortcutHint("Нажмите новое сочетание клавиш…");
+                  }}
+                  onKeyDown={captureDictationShortcut}
+                  onBlur={() => {
+                    if (capturingShortcut) setCapturingShortcut(false);
+                  }}
+                >
+                  {capturingShortcut ? "Жду сочетание…" : "Записать"}
+                </Button>
+              </div>
+
+              <div className="dictation-hint" aria-live="polite">
+                {shortcutHint ?? "Например: Option+Space или Command+Shift+Space"}
+              </div>
+
+              <ol className="dictation-steps">
+                <li>
+                  <span className="dictation-step-number">1</span>
+                  <span>
+                    <strong>Зажмите</strong> клавиши, когда хотите продиктовать
+                    текст.
+                  </span>
+                </li>
+                <li>
+                  <span className="dictation-step-number">2</span>
+                  <span>
+                    <strong>Скажите фразу</strong> и отпустите клавиши.
+                  </span>
+                </li>
+                <li>
+                  <span className="dictation-step-number">3</span>
+                  <span>
+                    <strong>Вставьте текст</strong> в любое место через ⌘ V.
+                  </span>
+                </li>
+              </ol>
+
+              <label className="dictation-enabled-row">
+                <span>
+                  <span className="dictation-enabled-title">Функция включена</span>
+                  <span className="dictation-enabled-hint">
+                    Можно временно отключить, если сочетание мешает.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={settings.dictation_enabled}
+                  onChange={(e) => toggleDictation(e.target.checked)}
+                />
+              </label>
+            </div>
+          </Field>
 
           <Field className="min-w-0">
             <FieldLabel>🪶 Конспект</FieldLabel>

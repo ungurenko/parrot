@@ -1,5 +1,6 @@
 mod binaries;
 mod cancellation;
+mod dictation;
 mod history;
 mod model;
 mod paths;
@@ -135,15 +136,32 @@ fn get_settings(app: AppHandle) -> Settings {
 }
 
 #[tauri::command]
-fn set_settings(app: AppHandle, new: Settings) -> Result<(), String> {
+fn get_dictation_status(
+    app: AppHandle,
+    dictation: State<'_, dictation::DictationManager>,
+) -> dictation::DictationStatus {
+    dictation.status(&app)
+}
+
+#[tauri::command]
+fn set_settings(
+    app: AppHandle,
+    dictation: State<'_, dictation::DictationManager>,
+    new: Settings,
+) -> Result<(), String> {
     let old = settings::load(&app);
-    settings::save(&app, &new)
-        .map_err(|e| e.to_string())
-        .map(|_| {
-            if old.engine != new.engine {
-                preload_active_engine(app);
-            }
-        })
+    if old.dictation_enabled != new.dictation_enabled
+        || old.dictation_hold_key != new.dictation_hold_key
+    {
+        dictation
+            .apply_settings(&app, &new)
+            .map_err(|e| format!("Не удалось применить сочетание клавиш: {e:#}"))?;
+    }
+    settings::save(&app, &new).map_err(|e| e.to_string())?;
+    if old.engine != new.engine {
+        preload_active_engine(app);
+    }
+    Ok(())
 }
 
 /// Whether the model for the currently-selected engine is downloaded and ready.
@@ -837,7 +855,16 @@ fn preload_active_engine(handle: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let dictation = dictation::DictationManager::new();
+    let dictation_for_shortcut = dictation.clone();
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, _shortcut, event| {
+                    dictation_for_shortcut.handle_shortcut_event(app, event.state());
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_focus();
@@ -847,7 +874,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             if let Err(e) = paths::migrate_legacy_app_data(&handle) {
                 eprintln!("Legacy app data migration failed: {e:#}");
@@ -881,6 +908,7 @@ pub fn run() {
                 summary_cancel,
                 model_cancel,
             });
+            app.manage(dictation.clone());
 
             if let Some(win) = app.get_webview_window("main") {
                 win.on_window_event(move |event| {
@@ -897,6 +925,10 @@ pub fn run() {
 
             preload_active_engine(handle.clone());
             binaries::warm_yt_dlp_startup_cache(handle.clone());
+            dictation.start_worker(handle.clone());
+            if let Err(e) = dictation.apply_settings(&handle, &s) {
+                tracing::error!("dictation shortcut registration failed: {e:#}");
+            }
 
             tracing::info!("Parrot started (engine: {})", s.engine);
             Ok(())
@@ -905,6 +937,7 @@ pub fn run() {
             enqueue_file,
             enqueue_youtube,
             get_settings,
+            get_dictation_status,
             set_settings,
             is_model_ready,
             get_engine_statuses,
