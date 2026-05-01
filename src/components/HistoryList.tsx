@@ -1,46 +1,89 @@
-import { Trash2Icon } from "lucide-react";
-import { ENGINE_LABEL, type Engine, type HistoryEntry } from "../types";
+import {
+  FileAudioIcon,
+  FileVideoIcon,
+  HistoryIcon,
+  MoreHorizontalIcon,
+  Trash2Icon,
+} from "lucide-react";
+import type { HistoryEntry } from "../types";
 
 interface Props {
   entries: HistoryEntry[];
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
+  onClear: () => void;
 }
 
-function relativeTime(iso: string): string {
+const MONTHS_RU = [
+  "января",
+  "февраля",
+  "марта",
+  "апреля",
+  "мая",
+  "июня",
+  "июля",
+  "августа",
+  "сентября",
+  "октября",
+  "ноября",
+  "декабря",
+];
+
+function absoluteDate(iso: string): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "недавно";
-  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (diffSec < 60) return "только что";
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} мин. назад`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr} ч. назад`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay === 1) return "вчера";
-  if (diffDay < 7) return `${diffDay} дн. назад`;
-  // Fall back to DD.MM.YYYY
   const d = new Date(then);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
-}
-
-function engineLabel(engine: string): string {
-  if (engine in ENGINE_LABEL) {
-    return ENGINE_LABEL[engine as Engine];
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  if (sameDay) return `Сегодня, ${time}`;
+  if (isYesterday) return `Вчера, ${time}`;
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${d.getDate()} ${MONTHS_RU[d.getMonth()]}, ${time}`;
   }
-  return engine;
+  return `${d.getDate()} ${MONTHS_RU[d.getMonth()]} ${d.getFullYear()}`;
 }
 
-export function HistoryList({ entries, onOpen, onDelete }: Props) {
-  if (entries.length === 0) return null;
+function mediaIcon(sourceName: string) {
+  const ext = sourceName.split(".").pop()?.toLowerCase();
+  if (ext && ["mp4", "mov", "mkv", "avi", "webm", "m4v"].includes(ext)) {
+    return <FileVideoIcon size={20} aria-hidden="true" />;
+  }
+  return <FileAudioIcon size={20} aria-hidden="true" />;
+}
 
+export function HistoryList({ entries, onOpen, onDelete, onClear }: Props) {
   return (
     <section className="history-list">
-      <h2 className="history-heading">История</h2>
+      <div className="history-head">
+        <h2 className="history-heading">История</h2>
+        {entries.length > 0 && (
+          <button
+            type="button"
+            className="history-clear"
+            onClick={onClear}
+            title="Удалить все записи из истории"
+          >
+            <HistoryIcon size={14} aria-hidden="true" />
+            Очистить
+          </button>
+        )}
+      </div>
+      {entries.length === 0 && (
+        <div className="history-empty">
+          Последние транскрипции появятся здесь после первого файла.
+        </div>
+      )}
       <ul className="history-items">
         {entries.map((entry) => (
           <li key={entry.id} className="history-item">
+            <span className="history-media" aria-hidden="true">
+              {mediaIcon(entry.sourceName)}
+            </span>
             <button
               type="button"
               className="history-item-main"
@@ -49,17 +92,12 @@ export function HistoryList({ entries, onOpen, onDelete }: Props) {
             >
               <span className="history-name">{entry.sourceName}</span>
               <span className="history-meta">
-                <span>{relativeTime(entry.createdAt)}</span>
-                <span className="history-sep">·</span>
-                <span>{engineLabel(entry.engine)}</span>
-                {entry.summaryPath && (
-                  <>
-                    <span className="history-sep">·</span>
-                    <span className="history-badge">🪶 конспект</span>
-                  </>
-                )}
+                <span>{absoluteDate(entry.createdAt)}</span>
               </span>
             </button>
+            <span className="history-more" aria-hidden="true">
+              <MoreHorizontalIcon width={16} height={16} />
+            </span>
             <button
               type="button"
               className="history-delete"

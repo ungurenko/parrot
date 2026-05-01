@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { FileAudioIcon, FileVideoIcon, FolderOpenIcon } from "lucide-react";
 import parrotImg from "/parrot.png";
 import { cn } from "@/lib/utils";
 
@@ -10,12 +11,19 @@ interface Props {
 
 const AUDIO_EXTS = ["mp3", "wav", "m4a", "flac", "ogg", "opus", "aac", "wma"];
 const VIDEO_EXTS = ["mp4", "mov", "mkv", "avi", "webm", "m4v"];
-const CHIP_FORMATS = ["MP3", "MP4", "MOV", "M4A", "FLAC", "WAV", "WEBM"];
+const CHIP_FORMATS = [
+  { label: "MP3", kind: "audio" },
+  { label: "M4A", kind: "audio" },
+  { label: "MP4", kind: "video" },
+  { label: "MOV", kind: "video" },
+  { label: "WAV", kind: "audio" },
+] as const;
 
 export function DropZone({ onFiles }: Props) {
   const [hovering, setHovering] = useState(false);
 
   useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
     let unlisten: (() => void) | null = null;
     getCurrentWebview()
       .onDragDropEvent((event) => {
@@ -39,6 +47,7 @@ export function DropZone({ onFiles }: Props) {
   }, [onFiles]);
 
   const pickFiles = useCallback(async () => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
     const result = await open({
       multiple: true,
       directory: false,
@@ -76,13 +85,19 @@ export function DropZone({ onFiles }: Props) {
       <div className="hero-text">
         <h1>Перетащите файл — и попугай перескажет.</h1>
         <p>
-          Локальная транскрипция аудио и видео на вашем Mac. Без сети, без
-          облаков, без подписки.
+          Локальная транскрипция аудио и видео на вашем&nbsp;Mac.
+          <br />
+          Без сети, без облаков, без подписки.
         </p>
         <div className="format-chips">
           {CHIP_FORMATS.map((f) => (
-            <span key={f} className="chip">
-              {f}
+            <span key={f.label} className="chip">
+              {f.kind === "audio" ? (
+                <FileAudioIcon size={13} aria-hidden="true" />
+              ) : (
+                <FileVideoIcon size={13} aria-hidden="true" />
+              )}
+              {f.label}
             </span>
           ))}
         </div>
@@ -96,6 +111,7 @@ export function DropZone({ onFiles }: Props) {
           pickFiles();
         }}
       >
+        <FolderOpenIcon size={17} aria-hidden="true" />
         выбрать файл…
       </button>
     </div>

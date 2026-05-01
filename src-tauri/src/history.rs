@@ -78,6 +78,10 @@ pub fn remove(app: &AppHandle, id: &str) -> Result<()> {
     save(app, &entries)
 }
 
+pub fn clear(app: &AppHandle) -> Result<()> {
+    save(app, &[])
+}
+
 pub fn get(app: &AppHandle, id: &str) -> Option<HistoryEntry> {
     load(app).into_iter().find(|e| e.id == id)
 }

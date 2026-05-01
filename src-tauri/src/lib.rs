@@ -418,6 +418,13 @@ fn get_history(app: AppHandle) -> Vec<history::HistoryEntry> {
 }
 
 #[tauri::command]
+fn clear_history(app: AppHandle) -> Result<(), String> {
+    history::clear(&app).map_err(|e| e.to_string())?;
+    let _ = app.emit("history:updated", ());
+    Ok(())
+}
+
+#[tauri::command]
 fn delete_history_entry(id: String, app: AppHandle) -> Result<(), String> {
     history::remove(&app, &id).map_err(|e| e.to_string())?;
     let _ = app.emit("history:updated", ());
@@ -1005,6 +1012,7 @@ pub fn run() {
             cancel_summary,
             get_history,
             delete_history_entry,
+            clear_history,
             load_history_entry,
         ])
         .run(tauri::generate_context!())

@@ -154,6 +154,7 @@ export function useAutoUpdate(): AutoUpdate {
   }, [status, available, clearErrors, reportError]);
 
   useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
     void runCheck(false);
     const handle = setInterval(
       () => void runCheck(false),

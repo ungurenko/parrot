@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
+import { ChevronDownIcon, MicIcon } from "lucide-react";
 import parrotImg from "/parrot.png";
 import { EmptyState } from "./components/EmptyState";
 import { ProcessingView } from "./components/ProcessingView";
@@ -75,6 +76,25 @@ function displayShortcut(shortcut: string): string {
     .join("+");
 }
 
+const SHORTCUT_GLYPH: Record<string, string> = {
+  Cmd: "⌘",
+  Command: "⌘",
+  Meta: "⌘",
+  Shift: "⇧",
+  Option: "⌥",
+  Alt: "⌥",
+  Ctrl: "⌃",
+  Control: "⌃",
+};
+
+function parseShortcut(shortcut: string): string[] {
+  return shortcut
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => SHORTCUT_GLYPH[part] ?? part.toUpperCase());
+}
+
 function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -85,7 +105,7 @@ function App() {
     "idle",
   );
   const [updateDismissed, setUpdateDismissed] = useState(false);
-  const { history, deleteEntry, loadEntry } = useHistory();
+  const { history, deleteEntry, clearAll, loadEntry } = useHistory();
   const updater = useAutoUpdate();
 
   const reloadSettings = useCallback(async () => {
@@ -230,7 +250,7 @@ function App() {
 
   const engineLabel = settings ? ENGINE_LABEL[settings.engine] : undefined;
   const showQueue = jobs.length > 1;
-  const dictationLabel =
+  const dictationStatus =
     dictationPhase === "recording"
       ? "Запись"
       : dictationPhase === "processing"
@@ -239,7 +259,15 @@ function App() {
           ? "Вставлено"
           : dictationPhase === "error"
             ? "Ошибка диктовки"
-            : displayShortcut(settings?.dictation_hold_key ?? "Alt+Space");
+            : "Готово к диктовке";
+  const dictationIdle =
+    dictationPhase === "idle" ||
+    dictationPhase === "done" ||
+    dictationPhase === "error";
+  const dictationKeys = parseShortcut(
+    settings?.dictation_hold_key ?? "Alt+Space",
+  );
+  const dictationTitle = `Зажмите ${displayShortcut(settings?.dictation_hold_key ?? "Alt+Space")}, скажите фразу и отпустите. Parrot вставит текст автоматически`;
   const dictationLed =
     dictationPhase === "recording" || dictationPhase === "processing"
       ? "coral"
@@ -251,7 +279,7 @@ function App() {
     <main className="app-shell flex h-full flex-col">
       <header
         data-tauri-drag-region
-        className="glass-toolbar flex h-[48px] items-center justify-between gap-3 px-4 pl-20"
+        className="glass-toolbar flex items-center justify-between gap-3 px-4 pl-20"
       >
         <div data-tauri-drag-region className="flex items-center gap-2">
           <span
@@ -264,22 +292,42 @@ function App() {
         <div className="flex items-center gap-2">
           {settings?.dictation_enabled && (
             <span
-              className="pill"
-              title="Зажмите выбранное сочетание, скажите фразу и отпустите. Parrot вставит текст автоматически"
+              className="pill dictation-pill"
+              title={dictationTitle}
             >
+              <MicIcon
+                size={14}
+                className="dictation-mic"
+                aria-hidden="true"
+              />
+              {dictationIdle && (
+                <span className="dictation-keys">
+                  {dictationKeys.map((key, idx) => (
+                    <kbd key={idx} className="dictation-kbd">
+                      {key}
+                    </kbd>
+                  ))}
+                </span>
+              )}
+              <span className="dictation-status truncate">
+                {dictationStatus}
+              </span>
               <span className={`led ${dictationLed}`} />
-              <span className="truncate">{dictationLabel}</span>
             </span>
           )}
           {settings && (
             <button
               type="button"
-              className="pill"
+              className="pill engine-pill"
               onClick={() => setSettingsOpen(true)}
               title="Нажмите, чтобы сменить движок"
             >
-              <span className="led" />
               <span className="truncate">{engineLabel}</span>
+              <ChevronDownIcon
+                size={14}
+                className="pill-chevron"
+                aria-hidden="true"
+              />
             </button>
           )}
           <button
@@ -325,6 +373,8 @@ function App() {
               historyEntries={history}
               onOpenHistory={handleOpenHistory}
               onDeleteHistory={deleteEntry}
+              onClearHistory={clearAll}
+              onOpenSettings={() => setSettingsOpen(true)}
             />
           )}
           {view.kind === "processing" && (

@@ -16,6 +16,7 @@ export function useHistory() {
   }, []);
 
   useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
     reload();
     let unlisten: (() => void) | null = null;
     listen("history:updated", () => {
@@ -41,6 +42,16 @@ export function useHistory() {
     [],
   );
 
+  const clearAll = useCallback(async () => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    try {
+      await invoke("clear_history");
+      setHistory([]);
+    } catch (e) {
+      console.error("clear_history failed:", e);
+    }
+  }, []);
+
   const loadEntry = useCallback(
     async (id: string): Promise<LoadedHistoryEntry | null> => {
       try {
@@ -53,5 +64,5 @@ export function useHistory() {
     [],
   );
 
-  return { history, reload, deleteEntry, loadEntry };
+  return { history, reload, deleteEntry, clearAll, loadEntry };
 }
