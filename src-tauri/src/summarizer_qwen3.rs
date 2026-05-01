@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::Duration;
 use tar::Archive;
 use tauri::AppHandle;
 
@@ -23,6 +24,8 @@ const STANDALONE_PYTHON_URL: &str = "https://github.com/astral-sh/python-build-s
 const STANDALONE_PYTHON_SHA256: &str =
     "8966b2bcd9fa03ba22c080ad15a86bc12e41a00122b16f4b3740e302261124d9";
 const STANDALONE_PYTHON_BYTES: u64 = 17_836_558;
+const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub const SUMMARY_MODEL_REPO: &str = "mlx-community/Qwen3-4B-Instruct-2507-4bit";
 pub const EXPECTED_SUMMARY_BYTES: u64 = 2_300_000_000;
@@ -332,7 +335,13 @@ fn download_with_progress<F: Fn(&str) + Send + Sync>(
     dest: &Path,
     on_progress: &F,
 ) -> Result<()> {
-    let mut response = reqwest::blocking::get(url)
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(DOWNLOAD_CONNECT_TIMEOUT)
+        .timeout(DOWNLOAD_TOTAL_TIMEOUT)
+        .build()?;
+    let mut response = client
+        .get(url)
+        .send()
         .with_context(|| format!("HTTP GET failed: {url}"))?
         .error_for_status()?;
     let total = response.content_length().unwrap_or(STANDALONE_PYTHON_BYTES);

@@ -30,6 +30,8 @@ const WHISPER_MAIN_MIN_BYTES: u64 = 100 * 1024 * 1024;
 // Parakeet v3 ONNX model URLs (istupakov/parakeet-tdt-0.6b-v3-onnx)
 const PARAKEET_BASE: &str =
     "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
+const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub async fn download_whisper(
     app: AppHandle,
@@ -125,6 +127,8 @@ async fn download_with_progress(
     let tmp = dest.with_extension("part");
     let client = reqwest::Client::builder()
         .user_agent("parrot/0.1")
+        .connect_timeout(DOWNLOAD_CONNECT_TIMEOUT)
+        .read_timeout(DOWNLOAD_READ_TIMEOUT)
         .build()?;
     let resume_from = tokio::fs::metadata(&tmp)
         .await

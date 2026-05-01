@@ -1,8 +1,9 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,9 +46,32 @@ interface Props {
   updater: AutoUpdate;
 }
 
-function normalizeShortcutKey(key: string): string | null {
+type ShortcutKeyboardEvent = {
+  key: string;
+  code?: string;
+  metaKey: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  preventDefault: () => void;
+  stopPropagation: () => void;
+};
+
+type AccessibilityPermissionState = "checking" | "request" | "verify" | "granted";
+
+const ACCESSIBILITY_SETTINGS_URL =
+  "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
+function normalizeShortcutKey(key: string, code?: string): string | null {
   const lower = key.toLowerCase();
   if (["meta", "alt", "control", "shift"].includes(lower)) return null;
+  if (code?.startsWith("Key") && code.length === 4) return code.slice(3);
+  if (code?.startsWith("Digit") && code.length === 6) return code.slice(5);
+  if (code === "Space") return "Space";
+  if (code === "Escape") return "Escape";
+  if (code === "Enter" || code === "Return") return "Enter";
+  if (code === "Backspace") return "Backspace";
+  if (code === "Tab") return "Tab";
   if (lower === " ") return "Space";
   if (lower === "escape") return "Escape";
   if (lower === "enter" || lower === "return") return "Enter";
@@ -108,6 +132,8 @@ export function SettingsModal({ onClose, updater }: Props) {
   const [envSetupStatus, setEnvSetupStatus] = useState<string | null>(null);
   const [capturingShortcut, setCapturingShortcut] = useState(false);
   const [shortcutHint, setShortcutHint] = useState<string | null>(null);
+  const [accessibilityPermission, setAccessibilityPermission] =
+    useState<AccessibilityPermissionState>("checking");
 
   const refreshModelStatuses = () =>
     invoke<EngineStatuses>("get_engine_statuses").then(setModelStatuses);
@@ -119,6 +145,9 @@ export function SettingsModal({ onClose, updater }: Props) {
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
     refreshModelStatuses();
     refreshSummarizerStatus();
+    invoke<boolean>("check_accessibility_permission")
+      .then((granted) => setAccessibilityPermission(granted ? "granted" : "request"))
+      .catch(() => setAccessibilityPermission("request"));
   }, []);
 
   useEffect(() => {
@@ -273,12 +302,14 @@ export function SettingsModal({ onClose, updater }: Props) {
     }
   };
 
-  const captureDictationShortcut = (e: KeyboardEvent<HTMLButtonElement>) => {
+  const captureDictationShortcut = (
+    e: ShortcutKeyboardEvent | ReactKeyboardEvent<HTMLButtonElement>,
+  ) => {
     if (!capturingShortcut) return;
     e.preventDefault();
     e.stopPropagation();
 
-    const key = normalizeShortcutKey(e.key);
+    const key = normalizeShortcutKey(e.key, e.code);
     if (!key) {
       if (isModifierOnlyKey(e.key)) {
         setShortcutHint(
@@ -305,6 +336,53 @@ export function SettingsModal({ onClose, updater }: Props) {
     const shortcut = [...modifiers, key].join("+");
     void changeDictationShortcut(shortcut);
   };
+
+  const verifyAccessibilityPermission = async () => {
+    setAccessibilityPermission("checking");
+    try {
+      const granted = await invoke<boolean>("check_accessibility_permission");
+      setAccessibilityPermission(granted ? "granted" : "verify");
+    } catch {
+      setAccessibilityPermission("verify");
+    }
+  };
+
+  const openAccessibilitySettings = async () => {
+    try {
+      await openUrl(ACCESSIBILITY_SETTINGS_URL);
+    } catch (e: unknown) {
+      setModelError(
+        `Не удалось открыть настройки macOS автоматически. Откройте вручную: Системные настройки → Конфиденциальность и безопасность → Универсальный доступ. Ошибка: ${String(e)}`,
+      );
+    }
+  };
+
+  const requestAccessibilityPermission = async () => {
+    setAccessibilityPermission("checking");
+    try {
+      const granted = await invoke<boolean>("request_accessibility_permission");
+      setAccessibilityPermission(granted ? "granted" : "verify");
+      if (!granted) {
+        await openAccessibilitySettings();
+      }
+    } catch {
+      setAccessibilityPermission("verify");
+      await openAccessibilitySettings();
+    }
+  };
+
+  useEffect(() => {
+    if (!capturingShortcut) return;
+
+    const handleWindowKeyDown = (e: globalThis.KeyboardEvent) => {
+      captureDictationShortcut(e);
+    };
+
+    window.addEventListener("keydown", handleWindowKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", handleWindowKeyDown, { capture: true });
+    };
+  }, [capturingShortcut, settings]);
 
   const setupSummarizerEnv = async () => {
     setEnvSetupBusy(true);
@@ -481,10 +559,41 @@ export function SettingsModal({ onClose, updater }: Props) {
                 <li>
                   <span className="dictation-step-number">3</span>
                   <span>
-                    <strong>Вставьте текст</strong> в любое место через ⌘ V.
+                    <strong>Текст вставится</strong> в активное поле автоматически.
                   </span>
                 </li>
               </ol>
+
+              {accessibilityPermission !== "granted" && (
+                <div className="dictation-permission">
+                  <div className="min-w-0">
+                    <div className="dictation-permission-title">
+                      Нужно разрешение macOS
+                    </div>
+                    <div className="dictation-permission-hint">
+                      Без него Parrot сможет скопировать текст, но не вставит его
+                      автоматически.
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="dictation-permission-button"
+                    onClick={
+                      accessibilityPermission === "verify"
+                        ? verifyAccessibilityPermission
+                        : requestAccessibilityPermission
+                    }
+                    disabled={accessibilityPermission === "checking"}
+                  >
+                    {accessibilityPermission === "checking"
+                      ? "Проверяю…"
+                      : accessibilityPermission === "verify"
+                        ? "Проверить"
+                        : "Разрешить"}
+                  </Button>
+                </div>
+              )}
 
               <label className="dictation-enabled-row">
                 <span>

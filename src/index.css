@@ -1484,6 +1484,33 @@ body {
     line-height: 1;
     font-weight: 750;
   }
+  .dictation-permission {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    padding: var(--s-3);
+    border-radius: var(--r-md);
+    background: rgba(255,122,89,0.08);
+    border: 1px solid rgba(255,122,89,0.22);
+  }
+  .dictation-permission-title {
+    color: var(--ink);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-sm);
+    font-weight: 650;
+  }
+  .dictation-permission-hint {
+    margin-top: 2px;
+    color: var(--ink-3);
+    font-size: var(--fs-xs);
+    line-height: var(--lh-sm);
+  }
+  .dictation-permission-button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
   .dictation-enabled-row {
     display: flex;
     align-items: flex-start;
@@ -1527,6 +1554,13 @@ body {
       flex-direction: column;
     }
     .dictation-record-button {
+      width: 100%;
+    }
+    .dictation-permission {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .dictation-permission-button {
       width: 100%;
     }
   }

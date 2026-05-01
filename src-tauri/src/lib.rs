@@ -33,6 +33,23 @@ pub struct AppState {
     model_cancel: CancelRegistry,
 }
 
+struct CancelRegistryGuard {
+    registry: CancelRegistry,
+    id: String,
+}
+
+impl CancelRegistryGuard {
+    fn new(registry: CancelRegistry, id: String) -> Self {
+        Self { registry, id }
+    }
+}
+
+impl Drop for CancelRegistryGuard {
+    fn drop(&mut self) {
+        self.registry.remove(&self.id);
+    }
+}
+
 static PRELOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[derive(Serialize, Clone)]
@@ -144,6 +161,16 @@ fn get_dictation_status(
 }
 
 #[tauri::command]
+fn check_accessibility_permission() -> bool {
+    dictation::accessibility_permission_granted()
+}
+
+#[tauri::command]
+fn request_accessibility_permission() -> bool {
+    dictation::request_accessibility_permission()
+}
+
+#[tauri::command]
 fn set_settings(
     app: AppHandle,
     dictation: State<'_, dictation::DictationManager>,
@@ -229,8 +256,8 @@ async fn download_model_for_engine(
         .model_cancel
         .try_create(&task_id)
         .ok_or_else(|| "Эта модель уже подготавливается".to_string())?;
+    let _task_guard = CancelRegistryGuard::new(state.model_cancel.clone(), task_id);
     let result = download_model_inner(app, &engine, token).await;
-    state.model_cancel.remove(&task_id);
     result
 }
 
@@ -507,6 +534,21 @@ mod tests {
             Path::new("/Users/alex/Documents/Transcripts")
         ));
     }
+
+    #[test]
+    fn cancel_registry_guard_should_release_model_task_on_drop() {
+        let registry = CancelRegistry::new();
+        let task_id = "model:summary".to_string();
+        assert!(registry.try_create(&task_id).is_some());
+
+        {
+            let _guard = CancelRegistryGuard::new(registry.clone(), task_id.clone());
+            assert!(registry.get(&task_id).is_some());
+        }
+
+        assert!(registry.try_create(&task_id).is_some());
+        registry.remove(&task_id);
+    }
 }
 
 #[tauri::command]
@@ -538,6 +580,7 @@ async fn download_summarizer_model(
         .model_cancel
         .try_create(&task_id)
         .ok_or_else(|| "Модель конспекта уже подготавливается".to_string())?;
+    let _task_guard = CancelRegistryGuard::new(state.model_cancel.clone(), task_id);
     let _ = app.emit("summary_model:progress", 1u32);
     let _ = app.emit("summary_model:stage", "downloading");
 
@@ -578,7 +621,6 @@ async fn download_summarizer_model(
         Ok(inner) => inner.map_err(|e| e.to_string()),
         Err(e) => Err(e.to_string()),
     };
-    state.model_cancel.remove(&task_id);
     result?;
     let _ = app.emit("summary_model:stage", "ready");
     let _ = app.emit("summary_model:progress", 100u32);
@@ -613,20 +655,8 @@ async fn summarize(
         return Err("Модель конспекта не готова. Откройте настройки и подготовьте её.".to_string());
     }
 
-    // Validate transcript_path: must be a .txt file inside save_dir (hardening
-    // against a frontend or IPC caller pointing at an arbitrary filesystem path).
-    let transcript_path_buf = PathBuf::from(&transcript_path);
-    if !saved_file_kind_matches(&transcript_path_buf, SavedFileKind::Transcript) {
-        return Err("Путь транскрипта должен указывать на .txt".to_string());
-    }
-    let save_dir = settings::load(&app).save_dir;
-    let canonical_save = save_dir.canonicalize().unwrap_or(save_dir);
-    let canonical_transcript = transcript_path_buf
-        .canonicalize()
-        .map_err(|e| format!("Файл транскрипта недоступен: {e}"))?;
-    if !path_is_inside_dir(&canonical_transcript, &canonical_save) {
-        return Err("Транскрипт должен находиться в папке сохранения".to_string());
-    }
+    let transcript_path_buf =
+        validate_saved_file_path(&app, &transcript_path, SavedFileKind::Transcript)?;
 
     // Atomic create: refuses to start a second concurrent summarize for the same
     // job id (protects against UI races where a previous run is still winding down).
@@ -636,7 +666,6 @@ async fn summarize(
         .ok_or_else(|| "Конспект для этой записи уже генерируется".to_string())?;
     let cancel_registry = state.summary_cancel.clone();
 
-    let transcript_path_buf = canonical_transcript;
     let id_for_task = id.clone();
     let id_for_progress = id.clone();
     let app_for_task = app.clone();
@@ -938,6 +967,8 @@ pub fn run() {
             enqueue_youtube,
             get_settings,
             get_dictation_status,
+            check_accessibility_permission,
+            request_accessibility_permission,
             set_settings,
             is_model_ready,
             get_engine_statuses,

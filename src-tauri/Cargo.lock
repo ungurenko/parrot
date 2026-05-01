@@ -3326,6 +3326,8 @@ version = "0.4.6"
 dependencies = [
  "anyhow",
  "arboard",
+ "core-foundation",
+ "core-graphics",
  "cpal",
  "dirs 5.0.1",
  "flate2",

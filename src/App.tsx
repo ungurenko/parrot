@@ -101,7 +101,7 @@ function App() {
     });
     const doneP = listen<{ text: string }>("dictation:done", () => {
       setDictationPhase("done");
-      toast.success("Текст скопирован");
+      toast.success("Текст вставлен");
       doneTimer = window.setTimeout(() => setDictationPhase("idle"), 1800);
     });
     const errorP = listen<{ message: string }>("dictation:error", (e) => {
@@ -204,7 +204,7 @@ function App() {
       : dictationPhase === "processing"
         ? "Распознаю"
         : dictationPhase === "done"
-          ? "Скопировано"
+          ? "Вставлено"
           : dictationPhase === "error"
             ? "Ошибка диктовки"
             : displayShortcut(settings?.dictation_hold_key ?? "Alt+Space");
@@ -233,7 +233,7 @@ function App() {
           {settings?.dictation_enabled && (
             <span
               className="pill"
-              title="Зажмите выбранное сочетание, скажите фразу, отпустите и вставьте через Cmd+V"
+              title="Зажмите выбранное сочетание, скажите фразу и отпустите. Parrot вставит текст автоматически"
             >
               <span className={`led ${dictationLed}`} />
               <span className="truncate">{dictationLabel}</span>

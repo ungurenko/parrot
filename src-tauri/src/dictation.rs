@@ -1,10 +1,17 @@
 use anyhow::{anyhow, Result};
+use core_foundation::base::{Boolean, CFTypeRef, TCFType};
+use core_foundation::dictionary::CFDictionary;
+use core_foundation::string::{CFString, CFStringRef};
+use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, KeyCode};
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::ptr;
 use std::sync::{mpsc, Arc};
+use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -282,7 +289,13 @@ fn recording_worker(
                                         return;
                                     }
                                     match copy_to_clipboard(text.clone()).await {
-                                        Ok(()) => process_manager.mark_done(&process_app, text),
+                                        Ok(()) => match insert_text(text.clone()).await {
+                                            Ok(()) => process_manager.mark_done(&process_app, text),
+                                            Err(e) => process_manager.set_error(
+                                                &process_app,
+                                                format!("Текст скопирован, но не вставлен: {e:#}"),
+                                            ),
+                                        },
                                         Err(e) => process_manager.set_error(
                                             &process_app,
                                             format!("Не удалось скопировать текст: {e:#}"),
@@ -443,6 +456,158 @@ async fn copy_to_clipboard(text: String) -> Result<()> {
     .await?
 }
 
+async fn insert_text(text: String) -> Result<()> {
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        match insert_text_with_accessibility(&text) {
+            Ok(()) => {
+                tracing::info!("dictation text inserted through accessibility focused element");
+                Ok(())
+            }
+            Err(accessibility_error) => {
+                tracing::warn!(
+                    "accessibility text insertion failed, falling back to Cmd+V: {accessibility_error:#}"
+                );
+                send_command_v()
+            }
+        }
+    })
+    .await?
+}
+
+fn send_command_v() -> Result<()> {
+    ensure_accessibility_permission()?;
+
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| anyhow!("Не удалось создать системное событие клавиатуры."))?;
+    let flags = CGEventFlags::CGEventFlagCommand;
+
+    post_key_event(&source, KeyCode::COMMAND, true, flags)?;
+    thread::sleep(Duration::from_millis(20));
+    post_key_event(&source, KeyCode::ANSI_V, true, flags)?;
+    thread::sleep(Duration::from_millis(20));
+    post_key_event(&source, KeyCode::ANSI_V, false, flags)?;
+    thread::sleep(Duration::from_millis(20));
+    post_key_event(&source, KeyCode::COMMAND, false, CGEventFlags::empty())?;
+    tracing::info!("dictation paste shortcut posted");
+    Ok(())
+}
+
+fn post_key_event(
+    source: &CGEventSource,
+    key_code: u16,
+    key_down: bool,
+    flags: CGEventFlags,
+) -> Result<()> {
+    let event = CGEvent::new_keyboard_event(source.clone(), key_code, key_down)
+        .map_err(|_| anyhow!("Не удалось создать системное событие клавиатуры."))?;
+    event.set_flags(flags);
+    event.post(CGEventTapLocation::HID);
+    Ok(())
+}
+
+fn insert_text_with_accessibility(text: &str) -> Result<()> {
+    ensure_accessibility_permission()?;
+
+    let system = unsafe { AXUIElementCreateSystemWide() };
+    if system.is_null() {
+        anyhow::bail!("Не удалось получить системный Accessibility-элемент.");
+    }
+
+    let focused_attr = CFString::from_static_string("AXFocusedUIElement");
+    let mut focused: CFTypeRef = ptr::null();
+    let copy_error = unsafe {
+        AXUIElementCopyAttributeValue(
+            system,
+            focused_attr.as_concrete_TypeRef(),
+            &mut focused as *mut CFTypeRef,
+        )
+    };
+    unsafe { CFRelease(system as CFTypeRef) };
+
+    if copy_error != K_AX_ERROR_SUCCESS || focused.is_null() {
+        anyhow::bail!("Не удалось найти активное поле ввода (AX error {copy_error}).");
+    }
+
+    let replacement = CFString::new(text);
+    let selected_text_attr = CFString::from_static_string("AXSelectedText");
+    let set_error = unsafe {
+        AXUIElementSetAttributeValue(
+            focused as AXUIElementRef,
+            selected_text_attr.as_concrete_TypeRef(),
+            replacement.as_CFTypeRef(),
+        )
+    };
+    unsafe { CFRelease(focused) };
+
+    if set_error != K_AX_ERROR_SUCCESS {
+        anyhow::bail!("Активное поле не приняло прямую вставку (AX error {set_error}).");
+    }
+
+    Ok(())
+}
+
+pub(crate) fn accessibility_permission_granted() -> bool {
+    ax_is_process_trusted(false)
+}
+
+pub(crate) fn request_accessibility_permission() -> bool {
+    ax_is_process_trusted(true)
+}
+
+fn ensure_accessibility_permission() -> Result<()> {
+    if request_accessibility_permission() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "macOS не разрешает Parrot вставлять текст автоматически. Разрешите Parrot в Системные настройки → Конфиденциальность и безопасность → Универсальный доступ."
+        )
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ax_is_process_trusted(prompt: bool) -> bool {
+    let key = unsafe { CFString::wrap_under_get_rule(K_AX_TRUSTED_CHECK_OPTION_PROMPT) };
+    let value = if prompt {
+        core_foundation::boolean::CFBoolean::true_value()
+    } else {
+        core_foundation::boolean::CFBoolean::false_value()
+    };
+    let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
+    unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) != 0 }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ax_is_process_trusted(_prompt: bool) -> bool {
+    true
+}
+
+#[cfg(target_os = "macos")]
+type AXUIElementRef = *const std::ffi::c_void;
+
+#[cfg(target_os = "macos")]
+const K_AX_ERROR_SUCCESS: i32 = 0;
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    #[link_name = "kAXTrustedCheckOptionPrompt"]
+    static K_AX_TRUSTED_CHECK_OPTION_PROMPT: CFStringRef;
+
+    fn AXIsProcessTrustedWithOptions(options: CFTypeRef) -> Boolean;
+    fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+    fn AXUIElementCopyAttributeValue(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        value: *mut CFTypeRef,
+    ) -> i32;
+    fn AXUIElementSetAttributeValue(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        value: CFTypeRef,
+    ) -> i32;
+    fn CFRelease(cf: CFTypeRef);
+}
+
 fn push_f32_samples(
     data: &[f32],
     channels: usize,
@@ -571,4 +736,40 @@ fn normalize_shortcut_part(part: &str) -> Result<String> {
         }
     };
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_shortcut_should_accept_option_q() {
+        let shortcut = normalize_shortcut("Option+q").unwrap();
+
+        assert_eq!(shortcut, "Alt+Q");
+    }
+
+    #[test]
+    fn normalize_shortcut_should_accept_command_shift_space() {
+        let shortcut = normalize_shortcut("cmd+shift+space").unwrap();
+
+        assert_eq!(shortcut, "Command+Shift+Space");
+    }
+
+    #[test]
+    fn normalize_shortcut_should_reject_plain_key_without_modifier() {
+        let err = normalize_shortcut("Q").unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Сочетание должно содержать хотя бы одну служебную клавишу и обычную клавишу."
+        );
+    }
+
+    #[test]
+    fn normalize_shortcut_part_should_keep_function_keys_uppercase() {
+        let key = normalize_shortcut_part("f12").unwrap();
+
+        assert_eq!(key, "F12");
+    }
 }
