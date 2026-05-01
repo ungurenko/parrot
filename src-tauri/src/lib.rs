@@ -50,7 +50,7 @@ impl Drop for CancelRegistryGuard {
     }
 }
 
-static PRELOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+pub(crate) static PRELOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -174,9 +174,16 @@ fn request_accessibility_permission() -> bool {
 fn set_settings(
     app: AppHandle,
     dictation: State<'_, dictation::DictationManager>,
+    state: State<'_, AppState>,
     new: Settings,
 ) -> Result<(), String> {
     let old = settings::load(&app);
+    if old.engine != new.engine && state.queue.has_active_jobs() {
+        return Err(
+            "Нельзя менять движок во время активной транскрибации. Дождитесь окончания или отмените задачу."
+                .to_string(),
+        );
+    }
     if old.dictation_enabled != new.dictation_enabled
         || old.dictation_hold_key != new.dictation_hold_key
     {
@@ -336,13 +343,23 @@ async fn download_model_inner(
 }
 
 #[tauri::command]
-async fn delete_model(app: AppHandle) -> Result<(), String> {
+async fn delete_model(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let engine = settings::load(&app).engine;
-    delete_model_for_engine(app, engine).await
+    delete_model_for_engine(app, state, engine).await
 }
 
 #[tauri::command]
-async fn delete_model_for_engine(app: AppHandle, engine: String) -> Result<(), String> {
+async fn delete_model_for_engine(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    engine: String,
+) -> Result<(), String> {
+    if state.queue.has_active_jobs() {
+        return Err(
+            "Нельзя удалять модель во время активной транскрибации. Дождитесь окончания или отмените задачу."
+                .to_string(),
+        );
+    }
     tauri::async_runtime::spawn_blocking(move || delete_model_files(&app, &engine))
         .await
         .map_err(|e| e.to_string())?

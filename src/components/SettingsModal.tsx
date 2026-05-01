@@ -44,7 +44,13 @@ import type { AutoUpdate } from "../hooks/useAutoUpdate";
 interface Props {
   onClose: () => void;
   updater: AutoUpdate;
+  hasActiveJob: boolean;
 }
+
+const ACTIVE_JOB_HINT =
+  "Дождитесь окончания транскрибации, чтобы сменить модель.";
+const ACTIVE_JOB_DELETE_HINT =
+  "Дождитесь окончания транскрибации, чтобы удалить модель.";
 
 type ShortcutKeyboardEvent = {
   key: string;
@@ -107,7 +113,7 @@ function displayShortcutParts(shortcut: string): string[] {
     .filter(Boolean);
 }
 
-export function SettingsModal({ onClose, updater }: Props) {
+export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [appVersion, setAppVersion] = useState("");
   const [modelStatuses, setModelStatuses] = useState<EngineStatuses>({});
@@ -197,6 +203,10 @@ export function SettingsModal({ onClose, updater }: Props) {
 
   const changeEngine = async (engine: Engine) => {
     if (!settings) return;
+    if (engine !== settings.engine && hasActiveJob) {
+      setModelError(ACTIVE_JOB_HINT);
+      return;
+    }
     const next = { ...settings, engine };
     try {
       await invoke("set_settings", { new: next });
@@ -238,6 +248,10 @@ export function SettingsModal({ onClose, updater }: Props) {
 
   const deleteModel = async (engine: Engine) => {
     if (!modelStatuses[engine]?.modelReady) return;
+    if (hasActiveJob) {
+      setModelError(ACTIVE_JOB_DELETE_HINT);
+      return;
+    }
     const ok = window.confirm(
       `Вы уверены, что хотите удалить модель «${ENGINE_LABEL[engine]}»?\n\nТексты и настройки останутся на месте. Если модель понадобится снова, ее можно будет скачать заново.`,
     );
@@ -474,6 +488,7 @@ export function SettingsModal({ onClose, updater }: Props) {
               progress={modelProgress}
               progressDetail={modelProgressDetail}
               stage={modelStage}
+              hasActiveJob={hasActiveJob}
               onChange={changeEngine}
               onPrepare={prepareModel}
               onDelete={deleteModel}

@@ -28,6 +28,21 @@ type ViewState =
   | { kind: "processing"; job: Job }
   | { kind: "result"; job: Job };
 
+const BROWSER_PREVIEW_SETTINGS: Settings = {
+  save_dir: "",
+  onboarded: true,
+  engine: "parakeet",
+  language: "auto",
+  summarizer_enabled: false,
+  summarizer_promo_seen: true,
+  dictation_enabled: true,
+  dictation_hold_key: "Alt+Space",
+};
+
+function isTauriRuntime(): boolean {
+  return "__TAURI_INTERNALS__" in window;
+}
+
 function pickView(jobs: Job[], selectedId: string | null): ViewState {
   const selected = selectedId ? jobs.find((j) => j.id === selectedId) : null;
 
@@ -81,6 +96,12 @@ function App() {
 
   useEffect(() => {
     (async () => {
+      if (!isTauriRuntime()) {
+        setSettings(BROWSER_PREVIEW_SETTINGS);
+        setNeedsOnboarding(false);
+        setDictationPhase("idle");
+        return;
+      }
       const s = await reloadSettings();
       const modelReady = await invoke<boolean>("is_model_ready");
       setNeedsOnboarding(!s.onboarded || !modelReady);
@@ -183,6 +204,17 @@ function App() {
   );
 
   const view = useMemo(() => pickView(jobs, selectedId), [jobs, selectedId]);
+
+  const hasActiveJob = useMemo(
+    () =>
+      jobs.some(
+        (j) =>
+          j.status === "running" ||
+          j.status === "queued" ||
+          j.status === "canceling",
+      ),
+    [jobs],
+  );
 
   const resetToEmpty = useCallback(() => setSelectedId(null), []);
 
@@ -327,6 +359,7 @@ function App() {
       {settingsOpen && (
         <SettingsModal
           updater={updater}
+          hasActiveJob={hasActiveJob}
           onClose={() => {
             setSettingsOpen(false);
             reloadSettings();

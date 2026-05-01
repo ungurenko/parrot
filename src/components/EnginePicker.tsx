@@ -23,10 +23,16 @@ interface Props {
   progress?: number;
   progressDetail?: ModelProgressDetail | null;
   stage?: "downloading" | "warmup" | "ready";
+  hasActiveJob?: boolean;
   onChange: (engine: Engine) => void;
   onPrepare?: (engine: Engine) => void;
   onDelete?: (engine: Engine) => void;
 }
+
+const ACTIVE_JOB_SWITCH_HINT =
+  "Дождитесь окончания транскрибации, чтобы сменить модель";
+const ACTIVE_JOB_DELETE_HINT =
+  "Дождитесь окончания транскрибации, чтобы удалить модель";
 
 const OPTIONS: Array<{
   id: Engine;
@@ -75,6 +81,7 @@ export function EnginePicker({
   progress = 0,
   progressDetail = null,
   stage = "downloading",
+  hasActiveJob = false,
   onChange,
   onPrepare,
   onDelete,
@@ -110,8 +117,14 @@ export function EnginePicker({
               <button
                 type="button"
                   onClick={() => onChange(opt.id)}
-                  disabled={!available}
-                  title={active ? "Эта модель выбрана" : "Выбрать эту модель"}
+                  disabled={!available || (hasActiveJob && !active)}
+                  title={
+                    hasActiveJob && !active
+                      ? ACTIVE_JOB_SWITCH_HINT
+                      : active
+                        ? "Эта модель выбрана"
+                        : "Выбрать эту модель"
+                  }
                   className="flex min-w-0 flex-1 items-start gap-3 rounded-md text-left outline-none disabled:cursor-not-allowed disabled:opacity-60 focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
                 <span
@@ -181,10 +194,18 @@ export function EnginePicker({
                     type="button"
                     variant="destructive"
                     size="icon-sm"
-                    disabled={actionBusy}
+                    disabled={actionBusy || hasActiveJob}
                     onClick={() => onDelete(opt.id)}
-                    title={`Удалить модель ${opt.title}`}
-                    aria-label={`Удалить модель ${opt.title}`}
+                    title={
+                      hasActiveJob
+                        ? ACTIVE_JOB_DELETE_HINT
+                        : `Удалить модель ${opt.title}`
+                    }
+                    aria-label={
+                      hasActiveJob
+                        ? ACTIVE_JOB_DELETE_HINT
+                        : `Удалить модель ${opt.title}`
+                    }
                   >
                     <Trash2Icon data-icon="inline-start" />
                   </Button>

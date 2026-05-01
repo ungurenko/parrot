@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::{Duration, Instant};
@@ -117,6 +117,7 @@ pub struct JobQueue {
     next_sequence: AtomicU64,
     app: AppHandle,
     cancel: CancelRegistry,
+    active_count: Arc<AtomicUsize>,
 }
 
 impl JobQueue {
@@ -127,6 +128,13 @@ impl JobQueue {
     pub fn app_handle(&self) -> AppHandle {
         self.app.clone()
     }
+
+    /// True while at least one job is queued, running, or canceling.
+    /// Used to block engine/model changes that could race with active C++ model
+    /// loading and cause SIGBUS in std::ifstream::read.
+    pub fn has_active_jobs(&self) -> bool {
+        self.active_count.load(Ordering::Relaxed) > 0
+    }
 }
 
 impl JobQueue {
@@ -134,11 +142,13 @@ impl JobQueue {
         let (prep_tx, prep_rx) = mpsc::unbounded_channel::<QueuedJob>();
         let (ready_tx, ready_rx) = mpsc::unbounded_channel::<PreparedOutcome>();
         let cancel = CancelRegistry::new();
+        let active_count = Arc::new(AtomicUsize::new(0));
         let queue = Arc::new(Self {
             sender: Mutex::new(prep_tx),
             next_sequence: AtomicU64::new(0),
             app: app.clone(),
             cancel: cancel.clone(),
+            active_count: active_count.clone(),
         });
 
         let prep_rx = Arc::new(Mutex::new(prep_rx));
@@ -153,7 +163,7 @@ impl JobQueue {
         }
         drop(ready_tx);
 
-        tauri::async_runtime::spawn(transcribe_worker(app, ready_rx, cancel));
+        tauri::async_runtime::spawn(transcribe_worker(app, ready_rx, cancel, active_count));
         queue
     }
 
@@ -168,11 +178,13 @@ impl JobQueue {
             },
         );
         let tx = self.sender.lock().await;
+        self.active_count.fetch_add(1, Ordering::Relaxed);
         tx.send(QueuedJob {
             sequence,
             job: job.clone(),
         })
         .map_err(|e| {
+            self.active_count.fetch_sub(1, Ordering::Relaxed);
             self.cancel.remove(&job.id);
             anyhow::anyhow!(e.to_string())
         })?;
@@ -236,6 +248,7 @@ async fn transcribe_worker(
     app: AppHandle,
     mut rx: mpsc::UnboundedReceiver<PreparedOutcome>,
     cancel: CancelRegistry,
+    active_count: Arc<AtomicUsize>,
 ) {
     let mut next_sequence = 0u64;
     let mut pending = BTreeMap::new();
@@ -244,7 +257,7 @@ async fn transcribe_worker(
         pending.insert(outcome.sequence(), outcome);
 
         while let Some(outcome) = pending.remove(&next_sequence) {
-            handle_prepared_outcome(&app, outcome, &cancel).await;
+            handle_prepared_outcome(&app, outcome, &cancel, &active_count).await;
             next_sequence += 1;
         }
     }
@@ -254,7 +267,12 @@ async fn handle_prepared_outcome(
     app: &AppHandle,
     outcome: PreparedOutcome,
     cancel: &CancelRegistry,
+    active_count: &Arc<AtomicUsize>,
 ) {
+    // Each PreparedOutcome corresponds to one enqueued job reaching its terminal
+    // state (done, error, canceled). Decrement here so set_settings /
+    // delete_model_for_engine can re-enable engine changes.
+    active_count.fetch_sub(1, Ordering::Relaxed);
     match outcome {
         PreparedOutcome::Ready(prepared) => {
             let job = prepared.job.clone();
@@ -458,6 +476,13 @@ async fn transcribe_prepared(
         None
     };
     let text = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        // Hold PRELOAD_LOCK for the entire transcription so preload_active_engine
+        // can never run a parallel C++ model load (whisper.cpp / ONNX Runtime),
+        // which races with active mmap'd model reads and triggers SIGBUS in
+        // std::ifstream::read. UI guards in set_settings/delete_model_for_engine
+        // already block the obvious paths, but this defends against any future
+        // IPC path that could trigger preload while a job is mid-flight.
+        let _preload_guard = crate::PRELOAD_LOCK.lock();
         let progress = move |p: u32| {
             let _ = app_for_cb.emit(
                 "job:progress",
