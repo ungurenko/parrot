@@ -21,6 +21,8 @@ use crate::{paths, queue, settings, source, transcriber, transcriber_parakeet, t
 
 const MAX_RECORD_SECONDS: u32 = 10 * 60;
 const MIN_RECORD_SAMPLES: usize = 1_600;
+const SILENCE_PEAK_THRESHOLD: f32 = 0.005;
+const STREAM_FIRST_CALLBACK_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Clone)]
 pub struct DictationManager {
@@ -77,6 +79,14 @@ struct Recorder {
     samples: Arc<Mutex<Vec<f32>>>,
     sample_rate: u32,
     started_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RecordingStats {
+    count: usize,
+    peak: f32,
+    sample_rate: u32,
+    duration_secs: f32,
 }
 
 impl DictationManager {
@@ -270,7 +280,27 @@ fn recording_worker(
                 manager.mark_processing(&app);
                 let result = write_recording_to_tmp(&app, active);
                 match result {
-                    Ok((raw_wav, normalized_wav)) => {
+                    Ok((raw_wav, normalized_wav, stats)) => {
+                        tracing::info!(
+                            "dictation recorded: {} samples ({:.2}s) @ {} Hz, peak amplitude {:.4}",
+                            stats.count,
+                            stats.duration_secs,
+                            stats.sample_rate,
+                            stats.peak
+                        );
+
+                        if stats.peak < SILENCE_PEAK_THRESHOLD {
+                            cleanup_file(&raw_wav);
+                            cleanup_file(&normalized_wav);
+                            manager.set_error(
+                                &app,
+                                "Микрофон записал только тишину. Проверьте устройство ввода \
+в Системные настройки → Звук → Вход и попробуйте сказать ближе к микрофону."
+                                    .to_string(),
+                            );
+                            continue;
+                        }
+
                         let process_app = app.clone();
                         let process_manager = manager.clone();
                         tauri::async_runtime::spawn(async move {
@@ -284,7 +314,7 @@ fn recording_worker(
                                     if text.trim().is_empty() {
                                         process_manager.set_error(
                                             &process_app,
-                                            "Речь не распознана, буфер не изменён.".to_string(),
+                                            "Речь не распознана. Попробуйте говорить громче или ближе к микрофону.".to_string(),
                                         );
                                         return;
                                     }
@@ -319,15 +349,22 @@ impl Recorder {
         let device = host
             .default_input_device()
             .ok_or_else(|| anyhow!("Микрофон не найден."))?;
+        let device_name = device
+            .name()
+            .unwrap_or_else(|_| "<unknown>".to_string());
         let supported = device.default_input_config()?;
         let sample_rate = supported.sample_rate().0;
         let channels = supported.channels().max(1) as usize;
+        let sample_format = supported.sample_format();
+        tracing::info!(
+            "dictation input device: {device_name}, sample_rate {sample_rate} Hz, channels {channels}, format {sample_format:?}"
+        );
         let max_samples = sample_rate as usize * MAX_RECORD_SECONDS as usize;
         let config = supported.config();
         let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
         let err_fn = |e| tracing::error!("dictation input stream error: {e}");
 
-        let stream = match supported.sample_format() {
+        let stream = match sample_format {
             SampleFormat::F32 => {
                 let samples = samples.clone();
                 device.build_input_stream(
@@ -359,15 +396,28 @@ impl Recorder {
         };
 
         stream.play()?;
+        let deadline = Instant::now() + STREAM_FIRST_CALLBACK_TIMEOUT;
+        loop {
+            if !samples.lock().is_empty() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!(
+                    "Микрофон не начал поставлять аудио. Проверьте устройство ввода в Системные настройки → Звук → Вход."
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let started_at = Instant::now();
         Ok(Self {
             stream,
             samples,
             sample_rate,
-            started_at: Instant::now(),
+            started_at,
         })
     }
 
-    fn write_raw_wav(self, path: &Path) -> Result<()> {
+    fn write_raw_wav(self, path: &Path) -> Result<RecordingStats> {
         drop(self.stream);
         if self.started_at.elapsed() < Duration::from_millis(180) {
             anyhow::bail!("Запись слишком короткая.");
@@ -376,6 +426,10 @@ impl Recorder {
         if samples.len() < MIN_RECORD_SAMPLES {
             anyhow::bail!("Запись слишком короткая.");
         }
+
+        let count = samples.len();
+        let peak = peak_amplitude(&samples);
+        let duration_secs = count as f32 / self.sample_rate as f32;
 
         let spec = hound::WavSpec {
             channels: 1,
@@ -389,20 +443,35 @@ impl Recorder {
             writer.write_sample(value)?;
         }
         writer.finalize()?;
-        Ok(())
+        Ok(RecordingStats {
+            count,
+            peak,
+            sample_rate: self.sample_rate,
+            duration_secs,
+        })
     }
 }
 
-fn write_recording_to_tmp(app: &AppHandle, recorder: Recorder) -> Result<(PathBuf, PathBuf)> {
+fn peak_amplitude(samples: &[f32]) -> f32 {
+    samples.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()))
+}
+
+fn write_recording_to_tmp(
+    app: &AppHandle,
+    recorder: Recorder,
+) -> Result<(PathBuf, PathBuf, RecordingStats)> {
     let id = format!("dictation-{}", uuid::Uuid::new_v4());
     let tmp = paths::tmp_dir(app)?;
     let raw_wav = tmp.join(format!("{id}.raw.wav"));
     let normalized_wav = tmp.join(format!("{id}.wav"));
-    if let Err(e) = recorder.write_raw_wav(&raw_wav) {
-        cleanup_file(&raw_wav);
-        return Err(e);
-    }
-    Ok((raw_wav, normalized_wav))
+    let stats = match recorder.write_raw_wav(&raw_wav) {
+        Ok(stats) => stats,
+        Err(e) => {
+            cleanup_file(&raw_wav);
+            return Err(e);
+        }
+    };
+    Ok((raw_wav, normalized_wav, stats))
 }
 
 async fn process_wav_files(
@@ -771,5 +840,23 @@ mod tests {
         let key = normalize_shortcut_part("f12").unwrap();
 
         assert_eq!(key, "F12");
+    }
+
+    #[test]
+    fn peak_amplitude_should_return_max_absolute_value() {
+        let samples = vec![0.01_f32, -0.4_f32, 0.0_f32, 0.25_f32, -0.7_f32];
+        assert!((peak_amplitude(&samples) - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn peak_amplitude_below_threshold_marks_silence() {
+        let samples: Vec<f32> = (0..1000).map(|_| 0.001_f32).collect();
+        assert!(peak_amplitude(&samples) < SILENCE_PEAK_THRESHOLD);
+    }
+
+    #[test]
+    fn peak_amplitude_handles_empty_slice() {
+        let samples: Vec<f32> = Vec::new();
+        assert_eq!(peak_amplitude(&samples), 0.0);
     }
 }
