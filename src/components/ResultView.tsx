@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { CopyIcon, FolderOpenIcon } from "lucide-react";
 import {
   Empty,
   EmptyDescription,
@@ -276,36 +277,9 @@ export function ResultView({
               </div>
             </div>
             <div className="export-group">
-              <button
-                type="button"
-                className="export-btn txt"
-                onClick={revealInFinder}
-                disabled={!job.outputPath}
-                title="Открыть .txt в Finder"
-              >
-                <span className="dot" />
-                TXT
-              </button>
-              <button
-                type="button"
-                className="export-btn srt"
-                disabled
-                title="Скоро"
-              >
-                <span className="dot" />
-                SRT
-              </button>
-              <button
-                type="button"
-                className="export-btn md"
-                disabled
-                title="Скоро"
-              >
-                <span className="dot" />
-                MD
-              </button>
               <button type="button" className="export-btn" onClick={copyText}>
-                ⧉ Copy
+                <CopyIcon size={14} aria-hidden="true" />
+                Скопировать текст
               </button>
               <button
                 type="button"
@@ -313,7 +287,8 @@ export function ResultView({
                 onClick={revealInFinder}
                 disabled={!job.outputPath}
               >
-                ↗ Finder
+                <FolderOpenIcon size={14} aria-hidden="true" />
+                Показать файл
               </button>
             </div>
           </div>

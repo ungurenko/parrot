@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import parrotImg from "/parrot.png";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -25,6 +24,7 @@ import {
   isSlowModelDownload,
   modelDownloadDetails,
 } from "@/lib/modelProgress";
+import { cleanupTauriListeners, listenInTauri } from "@/lib/runtime";
 import {
   ENGINE_LABEL,
   ENGINE_SIZE,
@@ -59,20 +59,17 @@ export function Onboarding({ onDone }: Props) {
   }, []);
 
   useEffect(() => {
-    const progressP = listen<number>("model:progress", (e) =>
-      setProgress(e.payload),
-    );
-    const progressDetailP = listen<ModelProgressDetail>(
-      "model:progress_detail",
-      (e) => setProgressDetail(e.payload),
-    );
-    const stageP = listen<ModelStage>("model:stage", (e) =>
-      setModelStage(e.payload),
-    );
+    const listeners = [
+      listenInTauri<number>("model:progress", (e) => setProgress(e.payload)),
+      listenInTauri<ModelProgressDetail>("model:progress_detail", (e) =>
+        setProgressDetail(e.payload),
+      ),
+      listenInTauri<ModelStage>("model:stage", (e) =>
+        setModelStage(e.payload),
+      ),
+    ];
     return () => {
-      progressP.then((u) => u());
-      progressDetailP.then((u) => u());
-      stageP.then((u) => u());
+      cleanupTauriListeners(listeners);
     };
   }, []);
 

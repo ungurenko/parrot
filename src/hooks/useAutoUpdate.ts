@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { isTauriRuntime } from "@/lib/runtime";
 
 const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CURRENT_STATUS_TIMEOUT_MS = 3000;
@@ -64,15 +65,21 @@ export function useAutoUpdate(): AutoUpdate {
       const message = formatUpdateError(error);
       setErrorDetails(message);
       setErrorScope(scope);
-      invoke("log_client_error", { scope: `updater:${scope}`, message }).catch(
-        (e) => console.error("log_client_error failed:", e),
-      );
+      if (isTauriRuntime()) {
+        invoke("log_client_error", { scope: `updater:${scope}`, message }).catch(
+          (e) => console.error("log_client_error failed:", e),
+        );
+      }
     },
     [],
   );
 
   const runCheck = useCallback(
     async (manual: boolean) => {
+      if (!isTauriRuntime()) {
+        if (manual) setStatus("current");
+        return;
+      }
       if (inFlightRef.current) return;
       if (status === "installing") return;
       inFlightRef.current = true;
@@ -116,6 +123,7 @@ export function useAutoUpdate(): AutoUpdate {
   );
 
   const install = useCallback(async () => {
+    if (!isTauriRuntime()) return;
     if (status === "installing") return;
     try {
       setStatus("installing");
@@ -154,7 +162,7 @@ export function useAutoUpdate(): AutoUpdate {
   }, [status, available, clearErrors, reportError]);
 
   useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
+    if (!isTauriRuntime()) return;
     void runCheck(false);
     const handle = setInterval(
       () => void runCheck(false),

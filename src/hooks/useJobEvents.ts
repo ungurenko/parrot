@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { cleanupTauriListeners, isTauriRuntime, listenInTauri } from "@/lib/runtime";
 import type { Job, JobStage, SummaryStage } from "../types";
 
 interface JobQueued { id: string; sourceName: string; }
@@ -144,51 +144,43 @@ export function useJobEvents(
   onDone?: (id: string) => void,
 ) {
   useEffect(() => {
-    const unlisteners: Array<() => void> = [];
-
-    listen<JobQueued>("job:queued", (e) => {
-      dispatch({ type: "jobQueued", payload: e.payload });
-    }).then((u) => unlisteners.push(u));
-
-    listen<JobProgress>("job:progress", (e) => {
-      dispatch({ type: "jobProgress", payload: e.payload });
-    }).then((u) => unlisteners.push(u));
-
-    listen<JobDone>("job:done", (e) => {
-      dispatch({ type: "jobDone", payload: e.payload });
-      onDone?.(e.payload.id);
-    }).then((u) => unlisteners.push(u));
-
-    listen<JobError>("job:error", (e) => {
-      dispatch({ type: "jobError", payload: e.payload });
-    }).then((u) => unlisteners.push(u));
-
-    listen<JobTitle>("job:title", (e) => {
-      dispatch({ type: "jobTitle", payload: e.payload });
-    }).then((u) => unlisteners.push(u));
-
-    listen<JobCanceled>("job:canceled", (e) => {
-      dispatch({ type: "jobCanceled", payload: e.payload });
-    }).then((u) => unlisteners.push(u));
-
-    listen<SummaryProgress>("summary:progress", (e) => {
-      dispatch({ type: "summaryProgress", payload: e.payload });
-    }).then((u) => unlisteners.push(u));
-
-    listen<SummaryDone>("summary:done", (e) => {
-      dispatch({ type: "summaryDone", payload: e.payload });
-    }).then((u) => unlisteners.push(u));
-
-    listen<SummaryError>("summary:error", (e) => {
-      dispatch({ type: "summaryError", payload: e.payload });
-    }).then((u) => unlisteners.push(u));
-
-    listen<SummaryCanceled>("summary:canceled", (e) => {
-      dispatch({ type: "summaryCanceled", payload: e.payload });
-    }).then((u) => unlisteners.push(u));
+    if (!isTauriRuntime()) return;
+    const listeners = [
+      listenInTauri<JobQueued>("job:queued", (e) => {
+        dispatch({ type: "jobQueued", payload: e.payload });
+      }),
+      listenInTauri<JobProgress>("job:progress", (e) => {
+        dispatch({ type: "jobProgress", payload: e.payload });
+      }),
+      listenInTauri<JobDone>("job:done", (e) => {
+        dispatch({ type: "jobDone", payload: e.payload });
+        onDone?.(e.payload.id);
+      }),
+      listenInTauri<JobError>("job:error", (e) => {
+        dispatch({ type: "jobError", payload: e.payload });
+      }),
+      listenInTauri<JobTitle>("job:title", (e) => {
+        dispatch({ type: "jobTitle", payload: e.payload });
+      }),
+      listenInTauri<JobCanceled>("job:canceled", (e) => {
+        dispatch({ type: "jobCanceled", payload: e.payload });
+      }),
+      listenInTauri<SummaryProgress>("summary:progress", (e) => {
+        dispatch({ type: "summaryProgress", payload: e.payload });
+      }),
+      listenInTauri<SummaryDone>("summary:done", (e) => {
+        dispatch({ type: "summaryDone", payload: e.payload });
+      }),
+      listenInTauri<SummaryError>("summary:error", (e) => {
+        dispatch({ type: "summaryError", payload: e.payload });
+      }),
+      listenInTauri<SummaryCanceled>("summary:canceled", (e) => {
+        dispatch({ type: "summaryCanceled", payload: e.payload });
+      }),
+    ];
 
     return () => {
-      unlisteners.forEach((u) => u());
+      cleanupTauriListeners(listeners);
     };
   }, [dispatch, onDone]);
 }

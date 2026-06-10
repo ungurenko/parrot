@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { FileAudioIcon, FileVideoIcon, FolderOpenIcon } from "lucide-react";
 import parrotImg from "/parrot.png";
 import { cn } from "@/lib/utils";
+import { isTauriRuntime } from "@/lib/runtime";
 
 interface Props {
   onFiles: (paths: string[]) => void;
@@ -23,7 +24,7 @@ export function DropZone({ onFiles }: Props) {
   const [hovering, setHovering] = useState(false);
 
   useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
+    if (!isTauriRuntime()) return;
     let unlisten: (() => void) | null = null;
     getCurrentWebview()
       .onDragDropEvent((event) => {
@@ -47,7 +48,7 @@ export function DropZone({ onFiles }: Props) {
   }, [onFiles]);
 
   const pickFiles = useCallback(async () => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
+    if (!isTauriRuntime()) return;
     const result = await open({
       multiple: true,
       directory: false,
@@ -83,11 +84,11 @@ export function DropZone({ onFiles }: Props) {
       />
 
       <div className="hero-text">
-        <h1>Перетащите файл — и попугай перескажет.</h1>
+        <h1>Перетащите файл для транскрипции</h1>
         <p>
-          Локальная транскрипция аудио и видео на вашем&nbsp;Mac.
+          Локальная расшифровка аудио и видео на вашем&nbsp;Mac.
           <br />
-          Без сети, без облаков, без подписки.
+          Без облаков, подписок и лишней возни.
         </p>
         <div className="format-chips">
           {CHIP_FORMATS.map((f) => (
@@ -112,7 +113,7 @@ export function DropZone({ onFiles }: Props) {
         }}
       >
         <FolderOpenIcon size={17} aria-hidden="true" />
-        выбрать файл…
+        Выбрать файл
       </button>
     </div>
   );

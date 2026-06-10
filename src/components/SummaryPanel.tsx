@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  cleanupTauriListeners,
+  isTauriRuntime,
+  listenInTauri,
+} from "@/lib/runtime";
 import {
   SUMMARIZER_MODEL_LABEL,
   SUMMARIZER_MODEL_SIZE,
@@ -151,6 +155,12 @@ export function SummaryPanel({ job, autoStartDownload }: Props) {
   const [modelError, setModelError] = useState<string | null>(null);
 
   const refreshSummarizerStatus = async () => {
+    if (!isTauriRuntime()) {
+      const previewStatus = { available: true, modelReady: true };
+      setSummarizerStatus(previewStatus);
+      return previewStatus;
+    }
+
     try {
       const s = await invoke<SummarizerStatus>("get_summarizer_status");
       setSummarizerStatus(s);
@@ -166,16 +176,17 @@ export function SummaryPanel({ job, autoStartDownload }: Props) {
   }, []);
 
   useEffect(() => {
-    const progressP = listen<number>("summary_model:progress", (e) => {
-      setModelProgress(e.payload);
-    });
-    const stageP = listen<"downloading" | "warmup" | "ready">(
-      "summary_model:stage",
-      (e) => setModelStage(e.payload),
-    );
+    const listeners = [
+      listenInTauri<number>("summary_model:progress", (e) => {
+        setModelProgress(e.payload);
+      }),
+      listenInTauri<"downloading" | "warmup" | "ready">(
+        "summary_model:stage",
+        (e) => setModelStage(e.payload),
+      ),
+    ];
     return () => {
-      progressP.then((u) => u());
-      stageP.then((u) => u());
+      cleanupTauriListeners(listeners);
     };
   }, []);
 
@@ -185,6 +196,13 @@ export function SummaryPanel({ job, autoStartDownload }: Props) {
     setModelError(null);
     setModelProgress(1);
     setModelStage("downloading");
+    if (!isTauriRuntime()) {
+      setModelProgress(100);
+      setSummarizerStatus({ available: true, modelReady: true });
+      setModelInstalling(false);
+      return;
+    }
+
     try {
       await invoke("download_summarizer_model");
       setModelProgress(100);
@@ -211,6 +229,7 @@ export function SummaryPanel({ job, autoStartDownload }: Props) {
 
   const startSummary = async () => {
     if (!job.text || !job.outputPath) return;
+    if (!isTauriRuntime()) return;
     try {
       await invoke("summarize", {
         id: job.id,
@@ -223,6 +242,7 @@ export function SummaryPanel({ job, autoStartDownload }: Props) {
   };
 
   const cancelSummary = async () => {
+    if (!isTauriRuntime()) return;
     try {
       await invoke("cancel_summary", { id: job.id });
     } catch (e) {

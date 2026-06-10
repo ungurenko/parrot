@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { cleanupTauriListeners, isTauriRuntime, listenInTauri } from "@/lib/runtime";
 import type { HistoryEntry, LoadedHistoryEntry } from "../types";
 
 export function useHistory() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
 
   const reload = useCallback(async () => {
+    if (!isTauriRuntime()) return;
     try {
       const list = await invoke<HistoryEntry[]>("get_history");
       setHistory(list);
@@ -16,21 +17,21 @@ export function useHistory() {
   }, []);
 
   useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
+    if (!isTauriRuntime()) return;
     reload();
-    let unlisten: (() => void) | null = null;
-    listen("history:updated", () => {
-      reload();
-    }).then((u) => {
-      unlisten = u;
-    });
+    const listeners = [
+      listenInTauri("history:updated", () => {
+        reload();
+      }),
+    ];
     return () => {
-      if (unlisten) unlisten();
+      cleanupTauriListeners(listeners);
     };
   }, [reload]);
 
   const deleteEntry = useCallback(
     async (id: string) => {
+      if (!isTauriRuntime()) return;
       try {
         await invoke("delete_history_entry", { id });
         // Optimistic local update; backend also emits history:updated.
@@ -43,7 +44,7 @@ export function useHistory() {
   );
 
   const clearAll = useCallback(async () => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
+    if (!isTauriRuntime()) return;
     try {
       await invoke("clear_history");
       setHistory([]);
@@ -54,6 +55,7 @@ export function useHistory() {
 
   const loadEntry = useCallback(
     async (id: string): Promise<LoadedHistoryEntry | null> => {
+      if (!isTauriRuntime()) return null;
       try {
         return await invoke<LoadedHistoryEntry>("load_history_entry", { id });
       } catch (e) {

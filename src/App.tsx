@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { ChevronDownIcon, MicIcon } from "lucide-react";
 import parrotImg from "/parrot.png";
@@ -16,6 +15,11 @@ import { jobsReducer, useJobEvents } from "./hooks/useJobEvents";
 import { useHistory } from "./hooks/useHistory";
 import { useAutoUpdate } from "./hooks/useAutoUpdate";
 import { UpdateBanner } from "./components/UpdateBanner";
+import {
+  cleanupTauriListeners,
+  isTauriRuntime,
+  listenInTauri,
+} from "./lib/runtime";
 import {
   ENGINE_LABEL,
   type DictationPhase,
@@ -39,10 +43,6 @@ const BROWSER_PREVIEW_SETTINGS: Settings = {
   dictation_enabled: true,
   dictation_hold_key: "Alt+Space",
 };
-
-function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window;
-}
 
 function pickView(jobs: Job[], selectedId: string | null): ViewState {
   const selected = selectedId ? jobs.find((j) => j.id === selectedId) : null;
@@ -131,31 +131,31 @@ function App() {
   }, [reloadSettings]);
 
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     let doneTimer: number | undefined;
-    const startedP = listen("dictation:started", () => {
-      window.clearTimeout(doneTimer);
-      setDictationPhase("recording");
-    });
-    const processingP = listen("dictation:processing", () => {
-      window.clearTimeout(doneTimer);
-      setDictationPhase("processing");
-    });
-    const doneP = listen<{ text: string }>("dictation:done", () => {
-      setDictationPhase("done");
-      toast.success("Текст вставлен");
-      doneTimer = window.setTimeout(() => setDictationPhase("idle"), 1800);
-    });
-    const errorP = listen<{ message: string }>("dictation:error", (e) => {
-      window.clearTimeout(doneTimer);
-      setDictationPhase("error");
-      toast.error("Диктовка не сработала", { description: e.payload.message });
-    });
+    const listeners = [
+      listenInTauri("dictation:started", () => {
+        window.clearTimeout(doneTimer);
+        setDictationPhase("recording");
+      }),
+      listenInTauri("dictation:processing", () => {
+        window.clearTimeout(doneTimer);
+        setDictationPhase("processing");
+      }),
+      listenInTauri<{ text: string }>("dictation:done", () => {
+        setDictationPhase("done");
+        toast.success("Текст вставлен");
+        doneTimer = window.setTimeout(() => setDictationPhase("idle"), 1800);
+      }),
+      listenInTauri<{ message: string }>("dictation:error", (e) => {
+        window.clearTimeout(doneTimer);
+        setDictationPhase("error");
+        toast.error("Диктовка не сработала", { description: e.payload.message });
+      }),
+    ];
     return () => {
       window.clearTimeout(doneTimer);
-      startedP.then((u) => u());
-      processingP.then((u) => u());
-      doneP.then((u) => u());
-      errorP.then((u) => u());
+      cleanupTauriListeners(listeners);
     };
   }, []);
 
@@ -169,6 +169,7 @@ function App() {
   }, []);
 
   const handleFiles = useCallback(async (paths: string[]) => {
+    if (!isTauriRuntime()) return;
     for (const p of paths) {
       try {
         await invoke("enqueue_file", { path: p });
@@ -180,6 +181,7 @@ function App() {
   }, []);
 
   const handleYouTube = useCallback(async (url: string) => {
+    if (!isTauriRuntime()) return;
     try {
       await invoke("enqueue_youtube", { url });
     } catch (e) {
@@ -280,10 +282,11 @@ function App() {
           />
           <h1 className="glass-title text-[13px]">Parrot</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="toolbar-actions flex min-w-0 items-center gap-2">
           {settings?.dictation_enabled && (
             <span
               className="pill dictation-pill"
+              aria-label={dictationTitle}
               title={dictationTitle}
             >
               <MicIcon
@@ -361,6 +364,7 @@ function App() {
             <EmptyState
               onFiles={handleFiles}
               onYouTube={handleYouTube}
+              engineLabel={engineLabel}
               historyEntries={history}
               onOpenHistory={handleOpenHistory}
               onDeleteHistory={deleteEntry}
@@ -403,7 +407,9 @@ function App() {
           hasActiveJob={hasActiveJob}
           onClose={() => {
             setSettingsOpen(false);
-            reloadSettings();
+            if (isTauriRuntime()) {
+              reloadSettings();
+            }
           }}
         />
       )}

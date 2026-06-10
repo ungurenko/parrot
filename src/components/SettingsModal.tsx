@@ -1,7 +1,6 @@
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -37,6 +36,11 @@ import { UpdateChecker } from "./UpdateChecker";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
+import {
+  cleanupTauriListeners,
+  isTauriRuntime,
+  listenInTauri,
+} from "@/lib/runtime";
 import { DownloadIcon, Trash2Icon } from "lucide-react";
 
 import type { AutoUpdate } from "../hooks/useAutoUpdate";
@@ -64,9 +68,44 @@ type ShortcutKeyboardEvent = {
 };
 
 type AccessibilityPermissionState = "checking" | "request" | "verify" | "granted";
+type SettingsTab = "basic" | "models" | "dictation" | "summary" | "updates";
 
 const ACCESSIBILITY_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
+const PREVIEW_SETTINGS: Settings = {
+  save_dir: "~/Documents/Parrot",
+  onboarded: true,
+  engine: "parakeet",
+  language: "auto",
+  summarizer_enabled: false,
+  summarizer_promo_seen: true,
+  dictation_enabled: true,
+  dictation_hold_key: "Alt+Space",
+};
+
+const PREVIEW_ENGINE_STATUSES: EngineStatuses = {
+  parakeet: { available: true, modelReady: true },
+  whisper: { available: true, modelReady: false },
+  "qwen-0.6b": {
+    available: false,
+    modelReady: false,
+    unavailableReason: "В предпросмотре Qwen ASR недоступен.",
+  },
+  "qwen-1.7b": {
+    available: false,
+    modelReady: false,
+    unavailableReason: "В предпросмотре Qwen ASR недоступен.",
+  },
+};
+
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
+  { id: "basic", label: "Основное" },
+  { id: "models", label: "Модели" },
+  { id: "dictation", label: "Диктовка" },
+  { id: "summary", label: "Конспект" },
+  { id: "updates", label: "Обновления" },
+];
 
 interface ModelSettingsSectionProps {
   settings: Settings;
@@ -79,7 +118,6 @@ interface ModelSettingsSectionProps {
   hasActiveJob: boolean;
   modelError: string | null;
   onEngineChange: (engine: Engine) => void;
-  onLanguageChange: (language: TranscriptLanguage) => void;
   onPrepareModel: (engine: Engine) => void;
   onDeleteModel: (engine: Engine) => void;
 }
@@ -95,7 +133,6 @@ function ModelSettingsSection({
   hasActiveJob,
   modelError,
   onEngineChange,
-  onLanguageChange,
   onPrepareModel,
   onDeleteModel,
 }: ModelSettingsSectionProps) {
@@ -118,22 +155,6 @@ function ModelSettingsSection({
         />
       </Field>
 
-      <Field className="min-w-0">
-        <FieldLabel htmlFor="language">Язык аудио</FieldLabel>
-        <select
-          id="language"
-          value={settings.language}
-          onChange={(e) => onLanguageChange(e.target.value as TranscriptLanguage)}
-          className="h-10 w-full rounded-lg border border-white/70 bg-white/55 px-3 text-sm text-[color:var(--ink)] shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] outline-none transition-all duration-200 focus-visible:border-[color:var(--parrot-accent)] focus-visible:bg-white/85 focus-visible:ring-3 focus-visible:ring-[color:rgba(255,122,89,0.28)]"
-        >
-          {Object.entries(LANGUAGE_LABEL).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </Field>
-
       {modelError && (
         <Alert variant="destructive">
           <AlertDescription className="whitespace-pre-wrap break-words">
@@ -142,6 +163,58 @@ function ModelSettingsSection({
         </Alert>
       )}
     </>
+  );
+}
+
+interface SettingsTabsProps {
+  active: SettingsTab;
+  onChange: (tab: SettingsTab) => void;
+}
+
+function SettingsTabs({ active, onChange }: SettingsTabsProps) {
+  return (
+    <div className="settings-tabs" role="tablist" aria-label="Разделы настроек">
+      {SETTINGS_TABS.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          aria-selected={active === tab.id}
+          className={cn("settings-tab", active === tab.id && "active")}
+          onClick={() => onChange(tab.id)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+interface LanguageSettingsSectionProps {
+  language: TranscriptLanguage;
+  onLanguageChange: (language: TranscriptLanguage) => void;
+}
+
+function LanguageSettingsSection({
+  language,
+  onLanguageChange,
+}: LanguageSettingsSectionProps) {
+  return (
+    <Field className="min-w-0">
+      <FieldLabel htmlFor="language">Язык аудио</FieldLabel>
+      <select
+        id="language"
+        value={language}
+        onChange={(e) => onLanguageChange(e.target.value as TranscriptLanguage)}
+        className="glass-select"
+      >
+        {Object.entries(LANGUAGE_LABEL).map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+    </Field>
   );
 }
 
@@ -307,6 +380,39 @@ function SaveFolderSection({ saveDir, onPickFolder }: SaveFolderSectionProps) {
   );
 }
 
+interface UpdatesSettingsSectionProps {
+  updater: AutoUpdate;
+  onOpenLogs: () => void;
+}
+
+function UpdatesSettingsSection({
+  updater,
+  onOpenLogs,
+}: UpdatesSettingsSectionProps) {
+  return (
+    <Field className="min-w-0">
+      <FieldLabel>Обновления и диагностика</FieldLabel>
+      <div className="settings-simple-card">
+        <div className="settings-simple-copy">
+          <div className="settings-simple-title">Версия приложения</div>
+          <div className="settings-simple-text">
+            Проверка обновлений и логи для диагностики ошибок.
+          </div>
+        </div>
+        <UpdateChecker updater={updater} />
+        <Button
+          type="button"
+          variant="outline"
+          className="self-start"
+          onClick={onOpenLogs}
+        >
+          Открыть логи
+        </Button>
+      </div>
+    </Field>
+  );
+}
+
 interface SummarySettingsSectionProps {
   enabled: boolean;
   status: SummarizerStatus | null;
@@ -455,30 +561,16 @@ function SummarySettingsSection({
 }
 
 interface SettingsFooterProps {
-  updater: AutoUpdate;
   appVersion: string;
-  onOpenLogs: () => void;
 }
 
-function SettingsFooter({ updater, appVersion, onOpenLogs }: SettingsFooterProps) {
+function SettingsFooter({ appVersion }: SettingsFooterProps) {
   return (
     <>
       <Separator className="bg-white/50" />
 
-      <div className="modal-band-bottom flex min-w-0 shrink-0 flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-        <div className="flex min-w-0 flex-col items-start gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onOpenLogs}
-            className="px-0 text-muted-foreground"
-          >
-            📜 Открыть логи
-          </Button>
-          <UpdateChecker updater={updater} />
-        </div>
-        <div className="min-w-0 text-left text-xs text-muted-foreground sm:shrink-0 sm:text-right">
+      <div className="modal-band-bottom flex min-w-0 shrink-0 items-center justify-between gap-4 p-4">
+        <div className="min-w-0 text-left text-xs text-muted-foreground">
           <div>Разработано Александром Унгуренко, 2026</div>
           {appVersion && <div>v{appVersion}</div>}
         </div>
@@ -533,7 +625,9 @@ function displayShortcutParts(shortcut: string): string[] {
 }
 
 export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
+  const previewMode = !isTauriRuntime();
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [activeTab, setActiveTab] = useState<SettingsTab>("basic");
   const [appVersion, setAppVersion] = useState("");
   const [modelStatuses, setModelStatuses] = useState<EngineStatuses>({});
   const [busyEngine, setBusyEngine] = useState<Engine | null>(null);
@@ -560,12 +654,32 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const [accessibilityPermission, setAccessibilityPermission] =
     useState<AccessibilityPermissionState>("checking");
 
-  const refreshModelStatuses = () =>
-    invoke<EngineStatuses>("get_engine_statuses").then(setModelStatuses);
-  const refreshSummarizerStatus = () =>
-    invoke<SummarizerStatus>("get_summarizer_status").then(setSummarizerStatus);
+  const refreshModelStatuses = () => {
+    if (!isTauriRuntime()) {
+      setModelStatuses(PREVIEW_ENGINE_STATUSES);
+      return Promise.resolve();
+    }
+    return invoke<EngineStatuses>("get_engine_statuses").then(setModelStatuses);
+  };
+  const refreshSummarizerStatus = () => {
+    if (!isTauriRuntime()) {
+      setSummarizerStatus({ available: true, modelReady: false });
+      return Promise.resolve();
+    }
+    return invoke<SummarizerStatus>("get_summarizer_status").then(
+      setSummarizerStatus,
+    );
+  };
 
   useEffect(() => {
+    if (!isTauriRuntime()) {
+      setSettings(PREVIEW_SETTINGS);
+      setAppVersion("preview");
+      setModelStatuses(PREVIEW_ENGINE_STATUSES);
+      setSummarizerStatus({ available: true, modelReady: false });
+      setAccessibilityPermission("request");
+      return;
+    }
     invoke<Settings>("get_settings").then(setSettings);
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
     refreshModelStatuses();
@@ -576,38 +690,35 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   }, []);
 
   useEffect(() => {
-    const progressP = listen<number>("model:progress", (e) => {
-      setModelProgress(e.payload);
-    });
-    const progressDetailP = listen<ModelProgressDetail>(
-      "model:progress_detail",
-      (e) => setModelProgressDetail(e.payload),
-    );
-    const stageP = listen<"downloading" | "warmup" | "ready">(
-      "model:stage",
-      (e) => setModelStage(e.payload),
-    );
-    const summaryProgressP = listen<number>("summary_model:progress", (e) => {
-      setSummaryProgress(e.payload);
-    });
-    const summaryStageP = listen<"downloading" | "warmup" | "ready">(
-      "summary_model:stage",
-      (e) => setSummaryStage(e.payload),
-    );
-    const envProgressP = listen<string>("summary_env:progress", (e) =>
-      setEnvSetupStatus(e.payload),
-    );
+    if (!isTauriRuntime()) return;
+    const listeners = [
+      listenInTauri<number>("model:progress", (e) => {
+        setModelProgress(e.payload);
+      }),
+      listenInTauri<ModelProgressDetail>("model:progress_detail", (e) => {
+        setModelProgressDetail(e.payload);
+      }),
+      listenInTauri<"downloading" | "warmup" | "ready">("model:stage", (e) =>
+        setModelStage(e.payload),
+      ),
+      listenInTauri<number>("summary_model:progress", (e) => {
+        setSummaryProgress(e.payload);
+      }),
+      listenInTauri<"downloading" | "warmup" | "ready">(
+        "summary_model:stage",
+        (e) => setSummaryStage(e.payload),
+      ),
+      listenInTauri<string>("summary_env:progress", (e) =>
+        setEnvSetupStatus(e.payload),
+      ),
+    ];
     return () => {
-      progressP.then((u) => u());
-      progressDetailP.then((u) => u());
-      stageP.then((u) => u());
-      summaryProgressP.then((u) => u());
-      summaryStageP.then((u) => u());
-      envProgressP.then((u) => u());
+      cleanupTauriListeners(listeners);
     };
   }, []);
 
   const pickFolder = async () => {
+    if (previewMode) return;
     const result = await open({ directory: true, multiple: false });
     if (!result || !settings) return;
     const next = { ...settings, save_dir: result as string };
@@ -627,6 +738,11 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       return;
     }
     const next = { ...settings, engine };
+    if (previewMode) {
+      setSettings(next);
+      setModelError(null);
+      return;
+    }
     try {
       await invoke("set_settings", { new: next });
       setSettings(next);
@@ -639,6 +755,11 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const changeLanguage = async (language: TranscriptLanguage) => {
     if (!settings) return;
     const next = { ...settings, language };
+    if (previewMode) {
+      setSettings(next);
+      setModelError(null);
+      return;
+    }
     try {
       await invoke("set_settings", { new: next });
       setSettings(next);
@@ -649,6 +770,13 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   };
 
   const prepareModel = async (engine: Engine) => {
+    if (previewMode) {
+      setModelStatuses((prev) => ({
+        ...prev,
+        [engine]: { available: true, modelReady: true },
+      }));
+      return;
+    }
     setBusyEngine(engine);
     setModelError(null);
     setModelProgress(1);
@@ -676,6 +804,14 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
     );
     if (!ok) return;
 
+    if (previewMode) {
+      setModelStatuses((prev) => ({
+        ...prev,
+        [engine]: { ...(prev[engine] ?? { available: true }), modelReady: false },
+      }));
+      return;
+    }
+
     setDeletingEngine(engine);
     setModelError(null);
     try {
@@ -694,6 +830,11 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const toggleSummarizer = async (enabled: boolean) => {
     if (!settings) return;
     const next = { ...settings, summarizer_enabled: enabled };
+    if (previewMode) {
+      setSettings(next);
+      setModelError(null);
+      return;
+    }
     try {
       await invoke("set_settings", { new: next });
       setSettings(next);
@@ -706,6 +847,11 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const toggleDictation = async (enabled: boolean) => {
     if (!settings) return;
     const next = { ...settings, dictation_enabled: enabled };
+    if (previewMode) {
+      setSettings(next);
+      setModelError(null);
+      return;
+    }
     try {
       await invoke("set_settings", { new: next });
       setSettings(next);
@@ -722,6 +868,13 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       dictation_enabled: true,
       dictation_hold_key: shortcut,
     };
+    if (previewMode) {
+      setSettings(next);
+      setModelError(null);
+      setShortcutHint(`Сочетание сохранено: ${displayShortcut(shortcut)}`);
+      setCapturingShortcut(false);
+      return;
+    }
     try {
       await invoke("set_settings", { new: next });
       setSettings(next);
@@ -771,6 +924,10 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   };
 
   const verifyAccessibilityPermission = async () => {
+    if (previewMode) {
+      setAccessibilityPermission("granted");
+      return;
+    }
     setAccessibilityPermission("checking");
     try {
       const granted = await invoke<boolean>("check_accessibility_permission");
@@ -781,6 +938,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   };
 
   const openAccessibilitySettings = async () => {
+    if (previewMode) return;
     try {
       await openUrl(ACCESSIBILITY_SETTINGS_URL);
     } catch (e: unknown) {
@@ -791,6 +949,10 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   };
 
   const requestAccessibilityPermission = async () => {
+    if (previewMode) {
+      setAccessibilityPermission("granted");
+      return;
+    }
     setAccessibilityPermission("checking");
     try {
       const granted = await invoke<boolean>("request_accessibility_permission");
@@ -818,6 +980,11 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   }, [capturingShortcut, settings]);
 
   const setupSummarizerEnv = async () => {
+    if (previewMode) {
+      setSummarizerStatus({ available: true, modelReady: false });
+      setEnvSetupStatus(null);
+      return;
+    }
     setEnvSetupBusy(true);
     setModelError(null);
     setEnvSetupStatus("Подготовка…");
@@ -834,6 +1001,11 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   };
 
   const prepareSummarizerModel = async () => {
+    if (previewMode) {
+      setSummarizerStatus({ available: true, modelReady: true });
+      setSummaryProgress(100);
+      return;
+    }
     setSummaryBusy(true);
     setModelError(null);
     setSummaryProgress(1);
@@ -864,6 +1036,11 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       `Удалить модель «${SUMMARIZER_MODEL_LABEL}»?\n\nКонспекты не сохранятся, но транскрипции останутся на месте. При необходимости модель можно скачать заново.`,
     );
     if (!ok) return;
+    if (previewMode) {
+      setSummarizerStatus({ available: true, modelReady: false });
+      setSummaryProgress(0);
+      return;
+    }
     setSummaryDeleting(true);
     setModelError(null);
     try {
@@ -877,7 +1054,10 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
     }
   };
 
-  const openLogs = () => invoke("open_logs");
+  const openLogs = () => {
+    if (!isTauriRuntime()) return;
+    return invoke("open_logs");
+  };
 
   if (!settings) return null;
 
@@ -892,66 +1072,81 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
         <DialogHeader className="modal-band-top min-w-0 shrink-0 p-5 pr-12">
           <DialogTitle>⚙️ Настройки</DialogTitle>
           <DialogDescription>
-            Движок, папка сохранения и обновления приложения.
+            Базовые параметры, модели и дополнительные функции.
           </DialogDescription>
         </DialogHeader>
 
+        <SettingsTabs active={activeTab} onChange={setActiveTab} />
+
         <FieldGroup className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-5">
-          <ModelSettingsSection
-            settings={settings}
-            modelStatuses={modelStatuses}
-            busyEngine={busyEngine}
-            deletingEngine={deletingEngine}
-            modelProgress={modelProgress}
-            modelProgressDetail={modelProgressDetail}
-            modelStage={modelStage}
-            hasActiveJob={hasActiveJob}
-            modelError={modelError}
-            onEngineChange={changeEngine}
-            onLanguageChange={changeLanguage}
-            onPrepareModel={prepareModel}
-            onDeleteModel={deleteModel}
-          />
+          {activeTab === "basic" && (
+            <>
+              <SaveFolderSection saveDir={settings.save_dir} onPickFolder={pickFolder} />
+              <LanguageSettingsSection
+                language={settings.language}
+                onLanguageChange={changeLanguage}
+              />
+            </>
+          )}
 
-          <DictationSettingsSection
-            settings={settings}
-            capturingShortcut={capturingShortcut}
-            shortcutHint={shortcutHint}
-            accessibilityPermission={accessibilityPermission}
-            onStartCapture={() => {
-              setCapturingShortcut(true);
-              setShortcutHint("Нажмите новое сочетание клавиш…");
-            }}
-            onCaptureShortcut={captureDictationShortcut}
-            onStopCapture={() => setCapturingShortcut(false)}
-            onVerifyAccessibility={verifyAccessibilityPermission}
-            onRequestAccessibility={requestAccessibilityPermission}
-            onToggleDictation={toggleDictation}
-          />
+          {activeTab === "models" && (
+            <ModelSettingsSection
+              settings={settings}
+              modelStatuses={modelStatuses}
+              busyEngine={busyEngine}
+              deletingEngine={deletingEngine}
+              modelProgress={modelProgress}
+              modelProgressDetail={modelProgressDetail}
+              modelStage={modelStage}
+              hasActiveJob={hasActiveJob}
+              modelError={modelError}
+              onEngineChange={changeEngine}
+              onPrepareModel={prepareModel}
+              onDeleteModel={deleteModel}
+            />
+          )}
 
-          <SummarySettingsSection
-            enabled={settings.summarizer_enabled}
-            status={summarizerStatus}
-            busy={summaryBusy}
-            deleting={summaryDeleting}
-            progress={summaryProgress}
-            stage={summaryStage}
-            envSetupBusy={envSetupBusy}
-            envSetupStatus={envSetupStatus}
-            onToggle={toggleSummarizer}
-            onSetupEnv={setupSummarizerEnv}
-            onPrepareModel={prepareSummarizerModel}
-            onDeleteModel={deleteSummarizerModel}
-          />
+          {activeTab === "dictation" && (
+            <DictationSettingsSection
+              settings={settings}
+              capturingShortcut={capturingShortcut}
+              shortcutHint={shortcutHint}
+              accessibilityPermission={accessibilityPermission}
+              onStartCapture={() => {
+                setCapturingShortcut(true);
+                setShortcutHint("Нажмите новое сочетание клавиш…");
+              }}
+              onCaptureShortcut={captureDictationShortcut}
+              onStopCapture={() => setCapturingShortcut(false)}
+              onVerifyAccessibility={verifyAccessibilityPermission}
+              onRequestAccessibility={requestAccessibilityPermission}
+              onToggleDictation={toggleDictation}
+            />
+          )}
 
-          <SaveFolderSection saveDir={settings.save_dir} onPickFolder={pickFolder} />
+          {activeTab === "summary" && (
+            <SummarySettingsSection
+              enabled={settings.summarizer_enabled}
+              status={summarizerStatus}
+              busy={summaryBusy}
+              deleting={summaryDeleting}
+              progress={summaryProgress}
+              stage={summaryStage}
+              envSetupBusy={envSetupBusy}
+              envSetupStatus={envSetupStatus}
+              onToggle={toggleSummarizer}
+              onSetupEnv={setupSummarizerEnv}
+              onPrepareModel={prepareSummarizerModel}
+              onDeleteModel={deleteSummarizerModel}
+            />
+          )}
+
+          {activeTab === "updates" && (
+            <UpdatesSettingsSection updater={updater} onOpenLogs={openLogs} />
+          )}
         </FieldGroup>
 
-        <SettingsFooter
-          updater={updater}
-          appVersion={appVersion}
-          onOpenLogs={openLogs}
-        />
+        <SettingsFooter appVersion={appVersion} />
       </DialogContent>
     </Dialog>
   );
