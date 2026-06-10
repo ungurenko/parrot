@@ -68,6 +68,425 @@ type AccessibilityPermissionState = "checking" | "request" | "verify" | "granted
 const ACCESSIBILITY_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
+interface ModelSettingsSectionProps {
+  settings: Settings;
+  modelStatuses: EngineStatuses;
+  busyEngine: Engine | null;
+  deletingEngine: Engine | null;
+  modelProgress: number;
+  modelProgressDetail: ModelProgressDetail | null;
+  modelStage: "downloading" | "warmup" | "ready";
+  hasActiveJob: boolean;
+  modelError: string | null;
+  onEngineChange: (engine: Engine) => void;
+  onLanguageChange: (language: TranscriptLanguage) => void;
+  onPrepareModel: (engine: Engine) => void;
+  onDeleteModel: (engine: Engine) => void;
+}
+
+function ModelSettingsSection({
+  settings,
+  modelStatuses,
+  busyEngine,
+  deletingEngine,
+  modelProgress,
+  modelProgressDetail,
+  modelStage,
+  hasActiveJob,
+  modelError,
+  onEngineChange,
+  onLanguageChange,
+  onPrepareModel,
+  onDeleteModel,
+}: ModelSettingsSectionProps) {
+  return (
+    <>
+      <Field className="min-w-0">
+        <FieldLabel>Модели распознавания</FieldLabel>
+        <EnginePicker
+          value={settings.engine}
+          statuses={modelStatuses}
+          busyEngine={busyEngine}
+          deletingEngine={deletingEngine}
+          progress={modelProgress}
+          progressDetail={modelProgressDetail}
+          stage={modelStage}
+          hasActiveJob={hasActiveJob}
+          onChange={onEngineChange}
+          onPrepare={onPrepareModel}
+          onDelete={onDeleteModel}
+        />
+      </Field>
+
+      <Field className="min-w-0">
+        <FieldLabel htmlFor="language">Язык аудио</FieldLabel>
+        <select
+          id="language"
+          value={settings.language}
+          onChange={(e) => onLanguageChange(e.target.value as TranscriptLanguage)}
+          className="h-10 w-full rounded-lg border border-white/70 bg-white/55 px-3 text-sm text-[color:var(--ink)] shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] outline-none transition-all duration-200 focus-visible:border-[color:var(--parrot-accent)] focus-visible:bg-white/85 focus-visible:ring-3 focus-visible:ring-[color:rgba(255,122,89,0.28)]"
+        >
+          {Object.entries(LANGUAGE_LABEL).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      {modelError && (
+        <Alert variant="destructive">
+          <AlertDescription className="whitespace-pre-wrap break-words">
+            {modelError}
+          </AlertDescription>
+        </Alert>
+      )}
+    </>
+  );
+}
+
+interface DictationSettingsSectionProps {
+  settings: Settings;
+  capturingShortcut: boolean;
+  shortcutHint: string | null;
+  accessibilityPermission: AccessibilityPermissionState;
+  onStartCapture: () => void;
+  onCaptureShortcut: (
+    e: ShortcutKeyboardEvent | ReactKeyboardEvent<HTMLButtonElement>,
+  ) => void;
+  onStopCapture: () => void;
+  onVerifyAccessibility: () => void;
+  onRequestAccessibility: () => void;
+  onToggleDictation: (enabled: boolean) => void;
+}
+
+function DictationSettingsSection({
+  settings,
+  capturingShortcut,
+  shortcutHint,
+  accessibilityPermission,
+  onStartCapture,
+  onCaptureShortcut,
+  onStopCapture,
+  onVerifyAccessibility,
+  onRequestAccessibility,
+  onToggleDictation,
+}: DictationSettingsSectionProps) {
+  return (
+    <Field className="min-w-0">
+      <FieldLabel>Диктовка</FieldLabel>
+      <div className="dictation-card">
+        <div className="dictation-shortcut-row">
+          <div className="min-w-0">
+            <div className="dictation-eyebrow">Клавиши для записи</div>
+            <div
+              className="dictation-key-row"
+              aria-label={`Текущее сочетание: ${displayShortcut(settings.dictation_hold_key)}`}
+            >
+              {displayShortcutParts(settings.dictation_hold_key).map((part) => (
+                <span className="dictation-key" key={part}>
+                  {part}
+                </span>
+              ))}
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant={capturingShortcut ? "default" : "outline"}
+            className="dictation-record-button"
+            onClick={onStartCapture}
+            onKeyDown={onCaptureShortcut}
+            onBlur={() => {
+              if (capturingShortcut) onStopCapture();
+            }}
+          >
+            {capturingShortcut ? "Жду сочетание…" : "Записать"}
+          </Button>
+        </div>
+
+        <div className="dictation-hint" aria-live="polite">
+          {shortcutHint ?? "Например: Option+Space или Command+Shift+Space"}
+        </div>
+
+        <ol className="dictation-steps">
+          <li>
+            <span className="dictation-step-number">1</span>
+            <span>
+              <strong>Зажмите</strong> клавиши, когда хотите продиктовать текст.
+            </span>
+          </li>
+          <li>
+            <span className="dictation-step-number">2</span>
+            <span>
+              <strong>Скажите фразу</strong> и отпустите клавиши.
+            </span>
+          </li>
+          <li>
+            <span className="dictation-step-number">3</span>
+            <span>
+              <strong>Текст вставится</strong> в активное поле автоматически.
+            </span>
+          </li>
+        </ol>
+
+        {accessibilityPermission !== "granted" && (
+          <div className="dictation-permission">
+            <div className="min-w-0">
+              <div className="dictation-permission-title">
+                Нужно разрешение macOS
+              </div>
+              <div className="dictation-permission-hint">
+                Без него Parrot сможет скопировать текст, но не вставит его
+                автоматически.
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="dictation-permission-button"
+              onClick={
+                accessibilityPermission === "verify"
+                  ? onVerifyAccessibility
+                  : onRequestAccessibility
+              }
+              disabled={accessibilityPermission === "checking"}
+            >
+              {accessibilityPermission === "checking"
+                ? "Проверяю…"
+                : accessibilityPermission === "verify"
+                  ? "Проверить"
+                  : "Разрешить"}
+            </Button>
+          </div>
+        )}
+
+        <label className="dictation-enabled-row">
+          <span>
+            <span className="dictation-enabled-title">Функция включена</span>
+            <span className="dictation-enabled-hint">
+              Можно временно отключить, если сочетание мешает.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            checked={settings.dictation_enabled}
+            onChange={(e) => onToggleDictation(e.target.checked)}
+          />
+        </label>
+      </div>
+    </Field>
+  );
+}
+
+interface SaveFolderSectionProps {
+  saveDir: string;
+  onPickFolder: () => void;
+}
+
+function SaveFolderSection({ saveDir, onPickFolder }: SaveFolderSectionProps) {
+  return (
+    <Field className="min-w-0">
+      <FieldLabel htmlFor="save-dir">Папка сохранения</FieldLabel>
+      <div className="flex min-w-0 items-center gap-2">
+        <Input
+          id="save-dir"
+          readOnly
+          value={saveDir}
+          className="glass-input min-w-0 truncate"
+        />
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onPickFolder}
+          className="shrink-0"
+        >
+          Выбрать…
+        </Button>
+      </div>
+    </Field>
+  );
+}
+
+interface SummarySettingsSectionProps {
+  enabled: boolean;
+  status: SummarizerStatus | null;
+  busy: boolean;
+  deleting: boolean;
+  progress: number;
+  stage: "downloading" | "warmup" | "ready";
+  envSetupBusy: boolean;
+  envSetupStatus: string | null;
+  onToggle: (enabled: boolean) => void;
+  onSetupEnv: () => void;
+  onPrepareModel: () => void;
+  onDeleteModel: () => void;
+}
+
+function SummarySettingsSection({
+  enabled,
+  status,
+  busy,
+  deleting,
+  progress,
+  stage,
+  envSetupBusy,
+  envSetupStatus,
+  onToggle,
+  onSetupEnv,
+  onPrepareModel,
+  onDeleteModel,
+}: SummarySettingsSectionProps) {
+  return (
+    <Field className="min-w-0">
+      <FieldLabel>🪶 Конспект</FieldLabel>
+      <label className="summary-toggle">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => onToggle(e.target.checked)}
+        />
+        <span>
+          Показывать блок конспекта в результате транскрипции
+          <span className="summary-toggle-hint">
+            Кнопка «Сгенерировать» появится под каждым готовым транскриптом.
+            Модель Qwen 3-4B Instruct (4-bit MLX), работает полностью оффлайн.
+          </span>
+        </span>
+      </label>
+
+      {enabled && (
+        <div
+          className={cn(
+            "engine-card flex min-w-0 flex-col gap-2",
+            status?.modelReady && "selected",
+            status && !status.available && "unavailable",
+          )}
+        >
+          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <span className="min-w-0">
+                <span className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="font-medium leading-snug">
+                    {SUMMARIZER_MODEL_LABEL}
+                  </span>
+                  <Badge variant="outline">{SUMMARIZER_MODEL_SIZE}</Badge>
+                  <Badge variant="secondary">4-bit MLX</Badge>
+                  {status && !status.available && (
+                    <Badge variant="secondary">Недоступна</Badge>
+                  )}
+                </span>
+                <span className="mt-1 block whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
+                  {status?.unavailableReason ??
+                    "Разовая загрузка ~2.3 ГБ. После этого конспекты создаются оффлайн."}
+                </span>
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2 self-start sm:self-auto">
+              <span className={cn("status-chip", status?.modelReady && "ready")}>
+                <span className="dot" aria-hidden="true" />
+                {status?.modelReady ? "Скачана" : "Не скачана"}
+              </span>
+              {status && !status.available && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={envSetupBusy}
+                  onClick={onSetupEnv}
+                  title="Установить Python-окружение для конспекта"
+                >
+                  {envSetupBusy ? "Устанавливаю…" : "Установить окружение"}
+                </Button>
+              )}
+              {!status?.modelReady && status?.available && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size={busy ? "sm" : "icon-sm"}
+                  disabled={busy || deleting}
+                  onClick={onPrepareModel}
+                  title="Подготовить модель конспекта"
+                >
+                  {busy ? `${progress}%` : <DownloadIcon data-icon="inline-start" />}
+                </Button>
+              )}
+              {status?.modelReady && (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="icon-sm"
+                  disabled={busy || deleting}
+                  onClick={onDeleteModel}
+                  title="Удалить модель конспекта"
+                >
+                  <Trash2Icon data-icon="inline-start" />
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {busy && (
+            <div className="flex min-w-0 flex-col gap-2 pl-1">
+              <Progress
+                value={Math.max(progress, 2)}
+                className={stage === "warmup" ? "animate-pulse" : ""}
+              />
+              <div className="text-xs text-muted-foreground">
+                {stage === "warmup"
+                  ? `Прогреваю модель… ${progress}%`
+                  : `Скачиваю модель… ${progress}%`}
+              </div>
+            </div>
+          )}
+
+          {deleting && (
+            <div className="text-xs text-muted-foreground">Удаляю модель…</div>
+          )}
+
+          {(envSetupBusy || envSetupStatus) && (
+            <div className="text-xs text-muted-foreground pl-1">
+              {envSetupStatus ?? "Подготовка окружения…"}
+            </div>
+          )}
+        </div>
+      )}
+    </Field>
+  );
+}
+
+interface SettingsFooterProps {
+  updater: AutoUpdate;
+  appVersion: string;
+  onOpenLogs: () => void;
+}
+
+function SettingsFooter({ updater, appVersion, onOpenLogs }: SettingsFooterProps) {
+  return (
+    <>
+      <Separator className="bg-white/50" />
+
+      <div className="modal-band-bottom flex min-w-0 shrink-0 flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        <div className="flex min-w-0 flex-col items-start gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onOpenLogs}
+            className="px-0 text-muted-foreground"
+          >
+            📜 Открыть логи
+          </Button>
+          <UpdateChecker updater={updater} />
+        </div>
+        <div className="min-w-0 text-left text-xs text-muted-foreground sm:shrink-0 sm:text-right">
+          <div>Разработано Александром Унгуренко, 2026</div>
+          {appVersion && <div>v{appVersion}</div>}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function normalizeShortcutKey(key: string, code?: string): string | null {
   const lower = key.toLowerCase();
   if (["meta", "alt", "control", "shift"].includes(lower)) return null;
@@ -478,323 +897,61 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
         </DialogHeader>
 
         <FieldGroup className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-5">
-          <Field className="min-w-0">
-            <FieldLabel>Модели распознавания</FieldLabel>
-            <EnginePicker
-              value={settings.engine}
-              statuses={modelStatuses}
-              busyEngine={busyEngine}
-              deletingEngine={deletingEngine}
-              progress={modelProgress}
-              progressDetail={modelProgressDetail}
-              stage={modelStage}
-              hasActiveJob={hasActiveJob}
-              onChange={changeEngine}
-              onPrepare={prepareModel}
-              onDelete={deleteModel}
-            />
-          </Field>
+          <ModelSettingsSection
+            settings={settings}
+            modelStatuses={modelStatuses}
+            busyEngine={busyEngine}
+            deletingEngine={deletingEngine}
+            modelProgress={modelProgress}
+            modelProgressDetail={modelProgressDetail}
+            modelStage={modelStage}
+            hasActiveJob={hasActiveJob}
+            modelError={modelError}
+            onEngineChange={changeEngine}
+            onLanguageChange={changeLanguage}
+            onPrepareModel={prepareModel}
+            onDeleteModel={deleteModel}
+          />
 
-          <Field className="min-w-0">
-            <FieldLabel htmlFor="language">Язык аудио</FieldLabel>
-            <select
-              id="language"
-              value={settings.language}
-              onChange={(e) => changeLanguage(e.target.value as TranscriptLanguage)}
-              className="h-10 w-full rounded-lg border border-white/70 bg-white/55 px-3 text-sm text-[color:var(--ink)] shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] outline-none transition-all duration-200 focus-visible:border-[color:var(--parrot-accent)] focus-visible:bg-white/85 focus-visible:ring-3 focus-visible:ring-[color:rgba(255,122,89,0.28)]"
-            >
-              {Object.entries(LANGUAGE_LABEL).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <DictationSettingsSection
+            settings={settings}
+            capturingShortcut={capturingShortcut}
+            shortcutHint={shortcutHint}
+            accessibilityPermission={accessibilityPermission}
+            onStartCapture={() => {
+              setCapturingShortcut(true);
+              setShortcutHint("Нажмите новое сочетание клавиш…");
+            }}
+            onCaptureShortcut={captureDictationShortcut}
+            onStopCapture={() => setCapturingShortcut(false)}
+            onVerifyAccessibility={verifyAccessibilityPermission}
+            onRequestAccessibility={requestAccessibilityPermission}
+            onToggleDictation={toggleDictation}
+          />
 
-          {modelError && (
-            <Alert variant="destructive">
-              <AlertDescription className="whitespace-pre-wrap break-words">
-                {modelError}
-              </AlertDescription>
-            </Alert>
-          )}
+          <SummarySettingsSection
+            enabled={settings.summarizer_enabled}
+            status={summarizerStatus}
+            busy={summaryBusy}
+            deleting={summaryDeleting}
+            progress={summaryProgress}
+            stage={summaryStage}
+            envSetupBusy={envSetupBusy}
+            envSetupStatus={envSetupStatus}
+            onToggle={toggleSummarizer}
+            onSetupEnv={setupSummarizerEnv}
+            onPrepareModel={prepareSummarizerModel}
+            onDeleteModel={deleteSummarizerModel}
+          />
 
-          <Field className="min-w-0">
-            <FieldLabel>Диктовка</FieldLabel>
-            <div className="dictation-card">
-              <div className="dictation-shortcut-row">
-                <div className="min-w-0">
-                  <div className="dictation-eyebrow">Клавиши для записи</div>
-                  <div
-                    className="dictation-key-row"
-                    aria-label={`Текущее сочетание: ${displayShortcut(settings.dictation_hold_key)}`}
-                  >
-                    {displayShortcutParts(settings.dictation_hold_key).map((part) => (
-                      <span className="dictation-key" key={part}>
-                        {part}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant={capturingShortcut ? "default" : "outline"}
-                  className="dictation-record-button"
-                  onClick={() => {
-                    setCapturingShortcut(true);
-                    setShortcutHint("Нажмите новое сочетание клавиш…");
-                  }}
-                  onKeyDown={captureDictationShortcut}
-                  onBlur={() => {
-                    if (capturingShortcut) setCapturingShortcut(false);
-                  }}
-                >
-                  {capturingShortcut ? "Жду сочетание…" : "Записать"}
-                </Button>
-              </div>
-
-              <div className="dictation-hint" aria-live="polite">
-                {shortcutHint ?? "Например: Option+Space или Command+Shift+Space"}
-              </div>
-
-              <ol className="dictation-steps">
-                <li>
-                  <span className="dictation-step-number">1</span>
-                  <span>
-                    <strong>Зажмите</strong> клавиши, когда хотите продиктовать
-                    текст.
-                  </span>
-                </li>
-                <li>
-                  <span className="dictation-step-number">2</span>
-                  <span>
-                    <strong>Скажите фразу</strong> и отпустите клавиши.
-                  </span>
-                </li>
-                <li>
-                  <span className="dictation-step-number">3</span>
-                  <span>
-                    <strong>Текст вставится</strong> в активное поле автоматически.
-                  </span>
-                </li>
-              </ol>
-
-              {accessibilityPermission !== "granted" && (
-                <div className="dictation-permission">
-                  <div className="min-w-0">
-                    <div className="dictation-permission-title">
-                      Нужно разрешение macOS
-                    </div>
-                    <div className="dictation-permission-hint">
-                      Без него Parrot сможет скопировать текст, но не вставит его
-                      автоматически.
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="dictation-permission-button"
-                    onClick={
-                      accessibilityPermission === "verify"
-                        ? verifyAccessibilityPermission
-                        : requestAccessibilityPermission
-                    }
-                    disabled={accessibilityPermission === "checking"}
-                  >
-                    {accessibilityPermission === "checking"
-                      ? "Проверяю…"
-                      : accessibilityPermission === "verify"
-                        ? "Проверить"
-                        : "Разрешить"}
-                  </Button>
-                </div>
-              )}
-
-              <label className="dictation-enabled-row">
-                <span>
-                  <span className="dictation-enabled-title">Функция включена</span>
-                  <span className="dictation-enabled-hint">
-                    Можно временно отключить, если сочетание мешает.
-                  </span>
-                </span>
-                <input
-                  type="checkbox"
-                  checked={settings.dictation_enabled}
-                  onChange={(e) => toggleDictation(e.target.checked)}
-                />
-              </label>
-            </div>
-          </Field>
-
-          <Field className="min-w-0">
-            <FieldLabel>🪶 Конспект</FieldLabel>
-            <label className="summary-toggle">
-              <input
-                type="checkbox"
-                checked={settings.summarizer_enabled}
-                onChange={(e) => toggleSummarizer(e.target.checked)}
-              />
-              <span>
-                Показывать блок конспекта в результате транскрипции
-                <span className="summary-toggle-hint">
-                  Кнопка «Сгенерировать» появится под каждым готовым
-                  транскриптом. Модель Qwen 3-4B Instruct (4-bit MLX), работает
-                  полностью оффлайн.
-                </span>
-              </span>
-            </label>
-
-            {settings.summarizer_enabled && (
-              <div
-                className={cn(
-                  "engine-card flex min-w-0 flex-col gap-2",
-                  summarizerStatus?.modelReady && "selected",
-                  summarizerStatus && !summarizerStatus.available && "unavailable",
-                )}
-              >
-                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
-                  <div className="flex min-w-0 flex-1 items-start gap-3">
-                    <span className="min-w-0">
-                      <span className="flex min-w-0 flex-wrap items-center gap-2">
-                        <span className="font-medium leading-snug">
-                          {SUMMARIZER_MODEL_LABEL}
-                        </span>
-                        <Badge variant="outline">{SUMMARIZER_MODEL_SIZE}</Badge>
-                        <Badge variant="secondary">4-bit MLX</Badge>
-                        {summarizerStatus && !summarizerStatus.available && (
-                          <Badge variant="secondary">Недоступна</Badge>
-                        )}
-                      </span>
-                      <span className="mt-1 block whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
-                        {summarizerStatus?.unavailableReason ??
-                          "Разовая загрузка ~2.3 ГБ. После этого конспекты создаются оффлайн."}
-                      </span>
-                    </span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2 self-start sm:self-auto">
-                    <span
-                      className={cn(
-                        "status-chip",
-                        summarizerStatus?.modelReady && "ready",
-                      )}
-                    >
-                      <span className="dot" aria-hidden="true" />
-                      {summarizerStatus?.modelReady ? "Скачана" : "Не скачана"}
-                    </span>
-                    {summarizerStatus && !summarizerStatus.available && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={envSetupBusy}
-                        onClick={setupSummarizerEnv}
-                        title="Установить Python-окружение для конспекта"
-                      >
-                        {envSetupBusy ? "Устанавливаю…" : "Установить окружение"}
-                      </Button>
-                    )}
-                    {!summarizerStatus?.modelReady &&
-                      summarizerStatus?.available && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size={summaryBusy ? "sm" : "icon-sm"}
-                          disabled={summaryBusy || summaryDeleting}
-                          onClick={prepareSummarizerModel}
-                          title="Подготовить модель конспекта"
-                        >
-                          {summaryBusy ? (
-                            `${summaryProgress}%`
-                          ) : (
-                            <DownloadIcon data-icon="inline-start" />
-                          )}
-                        </Button>
-                      )}
-                    {summarizerStatus?.modelReady && (
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="icon-sm"
-                        disabled={summaryBusy || summaryDeleting}
-                        onClick={deleteSummarizerModel}
-                        title="Удалить модель конспекта"
-                      >
-                        <Trash2Icon data-icon="inline-start" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                {summaryBusy && (
-                  <div className="flex min-w-0 flex-col gap-2 pl-1">
-                    <Progress
-                      value={Math.max(summaryProgress, 2)}
-                      className={summaryStage === "warmup" ? "animate-pulse" : ""}
-                    />
-                    <div className="text-xs text-muted-foreground">
-                      {summaryStage === "warmup"
-                        ? `Прогреваю модель… ${summaryProgress}%`
-                        : `Скачиваю модель… ${summaryProgress}%`}
-                    </div>
-                  </div>
-                )}
-
-                {summaryDeleting && (
-                  <div className="text-xs text-muted-foreground">
-                    Удаляю модель…
-                  </div>
-                )}
-
-                {(envSetupBusy || envSetupStatus) && (
-                  <div className="text-xs text-muted-foreground pl-1">
-                    {envSetupStatus ?? "Подготовка окружения…"}
-                  </div>
-                )}
-              </div>
-            )}
-          </Field>
-
-          <Field className="min-w-0">
-            <FieldLabel htmlFor="save-dir">Папка сохранения</FieldLabel>
-            <div className="flex min-w-0 items-center gap-2">
-              <Input
-                id="save-dir"
-                readOnly
-                value={settings.save_dir}
-                className="glass-input min-w-0 truncate"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={pickFolder}
-                className="shrink-0"
-              >
-                Выбрать…
-              </Button>
-            </div>
-          </Field>
+          <SaveFolderSection saveDir={settings.save_dir} onPickFolder={pickFolder} />
         </FieldGroup>
 
-        <Separator className="bg-white/50" />
-
-        <div className="modal-band-bottom flex min-w-0 shrink-0 flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-          <div className="flex min-w-0 flex-col items-start gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={openLogs}
-              className="px-0 text-muted-foreground"
-            >
-              📜 Открыть логи
-            </Button>
-            <UpdateChecker updater={updater} />
-          </div>
-          <div className="min-w-0 text-left text-xs text-muted-foreground sm:shrink-0 sm:text-right">
-            <div>Разработано Александром Унгуренко, 2026</div>
-            {appVersion && <div>v{appVersion}</div>}
-          </div>
-        </div>
+        <SettingsFooter
+          updater={updater}
+          appVersion={appVersion}
+          onOpenLogs={openLogs}
+        />
       </DialogContent>
     </Dialog>
   );

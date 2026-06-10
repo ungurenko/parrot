@@ -349,9 +349,7 @@ impl Recorder {
         let device = host
             .default_input_device()
             .ok_or_else(|| anyhow!("Микрофон не найден."))?;
-        let device_name = device
-            .name()
-            .unwrap_or_else(|_| "<unknown>".to_string());
+        let device_name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
         let supported = device.default_input_config()?;
         let sample_rate = supported.sample_rate().0;
         let channels = supported.channels().max(1) as usize;

@@ -8,11 +8,12 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tar::Archive;
 use tauri::AppHandle;
 
 use crate::cancellation::CancelToken;
+use crate::fs_metrics::dir_size_bytes;
 use crate::paths;
 use crate::prompts;
 
@@ -76,7 +77,7 @@ fn model_cache_exists_in(cache_dir: &Path) -> bool {
     if !model_dir.exists() {
         return false;
     }
-    dir_size(&model_dir) >= (EXPECTED_SUMMARY_BYTES as f64 * 0.9) as u64
+    dir_size_bytes(&model_dir) >= (EXPECTED_SUMMARY_BYTES as f64 * 0.9) as u64
 }
 
 pub fn delete_model(app: &AppHandle) -> Result<()> {
@@ -92,39 +93,25 @@ pub fn delete_model(app: &AppHandle) -> Result<()> {
 
 /// Download the model weights by running a short generation that triggers HF download.
 pub fn warmup_model(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<()> {
-    let python = resolve_python(app)?;
-    let cache_dir = paths::qwen_cache_dir(app)?;
-
     if cancel.is_cancelled() {
         anyhow::bail!("cancelled");
     }
-    let child = mlx_lm_command(&python, &cache_dir)
-        .arg("generate")
-        .arg("--model")
-        .arg(SUMMARY_MODEL_REPO)
-        .arg("--prompt")
-        .arg("Привет")
-        .arg("--max-tokens")
-        .arg("4")
-        .arg("--verbose")
-        .arg("False")
-        .stdin(Stdio::null())
-        .spawn()?;
-
-    let pid = child.id();
-    cancel.register_pid(pid);
-    let output = child.wait_with_output()?;
-    cancel.unregister_pid(pid);
-    if !output.status.success() {
-        if cancel.is_cancelled() {
-            anyhow::bail!("cancelled");
-        }
-        return Err(command_error(
-            "Не удалось подготовить модель конспекта",
-            &output.stderr,
-            output.status.code(),
-        ));
-    }
+    let started = Instant::now();
+    run_mlx_lm_generate(
+        app,
+        MlxLmGenerateRequest {
+            prompt_arg: Some("Привет"),
+            max_tokens: "4",
+            ..MlxLmGenerateRequest::default()
+        },
+        cancel,
+        "Не удалось подготовить модель конспекта",
+    )?;
+    tracing::info!(
+        "summary model warmup finished in {:.2}s",
+        started.elapsed().as_secs_f64()
+    );
+    let cache_dir = paths::qwen_cache_dir(app)?;
     write_ready_marker(&cache_dir)?;
     Ok(())
 }
@@ -134,45 +121,70 @@ pub fn generate_summary(
     transcript: &str,
     cancel: Arc<CancelToken>,
 ) -> Result<String> {
+    let system_prompt = prompts::SUMMARY_SYSTEM_PROMPT;
+    let user_prompt = prompts::build_summary_user_prompt(transcript);
+    let started = Instant::now();
+
+    let text = run_mlx_lm_generate(
+        app,
+        MlxLmGenerateRequest {
+            system_prompt: Some(system_prompt),
+            prompt_stdin: Some(&user_prompt),
+            max_tokens: SUMMARY_MAX_TOKENS,
+            temp: Some(SUMMARY_TEMP),
+            top_p: Some(SUMMARY_TOP_P),
+            ..MlxLmGenerateRequest::default()
+        },
+        cancel,
+        "Модель конспекта завершилась с ошибкой",
+    )?;
+    if text.is_empty() {
+        return Err(anyhow!("Модель конспекта вернула пустой ответ"));
+    }
+    tracing::info!(
+        "summary generation finished in {:.2}s for {} chars",
+        started.elapsed().as_secs_f64(),
+        transcript.chars().count()
+    );
+    Ok(text)
+}
+
+#[derive(Default)]
+struct MlxLmGenerateRequest<'a> {
+    system_prompt: Option<&'a str>,
+    prompt_arg: Option<&'a str>,
+    prompt_stdin: Option<&'a str>,
+    max_tokens: &'a str,
+    temp: Option<&'a str>,
+    top_p: Option<&'a str>,
+}
+
+fn run_mlx_lm_generate(
+    app: &AppHandle,
+    request: MlxLmGenerateRequest<'_>,
+    cancel: Arc<CancelToken>,
+    error_prefix: &str,
+) -> Result<String> {
     let python = resolve_python(app)?;
     let cache_dir = paths::qwen_cache_dir(app)?;
 
-    let system_prompt = prompts::SUMMARY_SYSTEM_PROMPT;
-    let user_prompt = prompts::build_summary_user_prompt(transcript);
-
-    let mut child = mlx_lm_command(&python, &cache_dir)
-        .arg("generate")
-        .arg("--model")
-        .arg(SUMMARY_MODEL_REPO)
-        .arg("--system-prompt")
-        .arg(system_prompt)
-        .arg("--prompt")
-        .arg("-")
-        .arg("--max-tokens")
-        .arg(SUMMARY_MAX_TOKENS)
-        .arg("--temp")
-        .arg(SUMMARY_TEMP)
-        .arg("--top-p")
-        .arg(SUMMARY_TOP_P)
-        .arg("--verbose")
-        .arg("False")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut child = build_mlx_lm_generate_command(&python, &cache_dir, &request)
         .spawn()
         .context("Не удалось запустить mlx-lm")?;
 
     let pid = child.id();
     cancel.register_pid(pid);
 
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow!("mlx-lm не открыл stdin"))?;
-    stdin
-        .write_all(user_prompt.as_bytes())
-        .context("Не удалось передать промпт в stdin mlx-lm")?;
-    drop(stdin);
+    if let Some(prompt) = request.prompt_stdin {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("mlx-lm не открыл stdin"))?;
+        stdin
+            .write_all(prompt.as_bytes())
+            .context("Не удалось передать промпт в stdin mlx-lm")?;
+        drop(stdin);
+    }
 
     let output = child.wait_with_output()?;
     cancel.unregister_pid(pid);
@@ -182,17 +194,46 @@ pub fn generate_summary(
             return Err(anyhow!("cancelled"));
         }
         return Err(command_error(
-            "Модель конспекта завершилась с ошибкой",
+            error_prefix,
             &output.stderr,
             output.status.code(),
         ));
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if text.is_empty() {
-        return Err(anyhow!("Модель конспекта вернула пустой ответ"));
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn build_mlx_lm_generate_command(
+    python: &Path,
+    cache_dir: &Path,
+    request: &MlxLmGenerateRequest<'_>,
+) -> Command {
+    let mut command = mlx_lm_command(python, cache_dir);
+    command
+        .arg("generate")
+        .arg("--model")
+        .arg(SUMMARY_MODEL_REPO);
+    if let Some(system_prompt) = request.system_prompt {
+        command.arg("--system-prompt").arg(system_prompt);
     }
-    Ok(text)
+    if let Some(prompt_arg) = request.prompt_arg {
+        command.arg("--prompt").arg(prompt_arg);
+    } else if request.prompt_stdin.is_some() {
+        command.arg("--prompt").arg("-");
+        command.stdin(Stdio::piped());
+    }
+    command
+        .arg("--max-tokens")
+        .arg(request.max_tokens)
+        .arg("--verbose")
+        .arg("False");
+    if let Some(temp) = request.temp {
+        command.arg("--temp").arg(temp);
+    }
+    if let Some(top_p) = request.top_p {
+        command.arg("--top-p").arg(top_p);
+    }
+    command
 }
 
 fn mlx_lm_command(python: &Path, cache_dir: &Path) -> Command {
@@ -482,24 +523,6 @@ pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -
 
     on_progress("Готово");
     Ok(())
-}
-
-fn dir_size(path: &Path) -> u64 {
-    let mut total: u64 = 0;
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if let Ok(meta) = entry.metadata() {
-            if meta.is_file() {
-                total = total.saturating_add(meta.len());
-            } else if meta.is_dir() {
-                total = total.saturating_add(dir_size(&p));
-            }
-        }
-    }
-    total
 }
 
 fn write_ready_marker(cache_dir: &Path) -> Result<()> {

@@ -863,6 +863,12 @@ body {
     transition: background 0.15s;
     cursor: text;
   }
+  .transcript-plain {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: var(--font-sans);
+  }
   .seg:hover { background: rgba(255,255,255,0.5); }
 
   /* Job pill-rows (queue) */

@@ -103,6 +103,22 @@ enum PreparedOutcome {
     },
 }
 
+struct ActiveJobSlot {
+    active_count: Arc<AtomicUsize>,
+}
+
+impl ActiveJobSlot {
+    fn new(active_count: Arc<AtomicUsize>) -> Self {
+        Self { active_count }
+    }
+}
+
+impl Drop for ActiveJobSlot {
+    fn drop(&mut self) {
+        self.active_count.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 impl PreparedOutcome {
     fn sequence(&self) -> u64 {
         match self {
@@ -270,9 +286,9 @@ async fn handle_prepared_outcome(
     active_count: &Arc<AtomicUsize>,
 ) {
     // Each PreparedOutcome corresponds to one enqueued job reaching its terminal
-    // state (done, error, canceled). Decrement here so set_settings /
-    // delete_model_for_engine can re-enable engine changes.
-    active_count.fetch_sub(1, Ordering::Relaxed);
+    // state (done, error, canceled). Keep this slot alive while transcription
+    // runs so set_settings / delete_model_for_engine cannot race active models.
+    let _active_slot = ActiveJobSlot::new(active_count.clone());
     match outcome {
         PreparedOutcome::Ready(prepared) => {
             let job = prepared.job.clone();
@@ -617,4 +633,21 @@ fn wav_duration_seconds(path: &Path) -> Option<f64> {
 
 pub fn new_job_id() -> String {
     Uuid::new_v4().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_job_slot_should_keep_count_until_terminal_drop() {
+        let active_count = Arc::new(AtomicUsize::new(1));
+
+        {
+            let _slot = ActiveJobSlot::new(active_count.clone());
+            assert_eq!(active_count.load(Ordering::Relaxed), 1);
+        }
+
+        assert_eq!(active_count.load(Ordering::Relaxed), 0);
+    }
 }

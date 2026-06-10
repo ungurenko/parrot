@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
 use crate::cancellation::CancelToken;
+use crate::fs_metrics::dir_size_bytes;
 use crate::paths;
 
 pub const ENGINE_QWEN_0_6B: &str = "qwen-0.6b";
@@ -30,6 +31,16 @@ pub const EXPECTED_QWEN_0_6B_BYTES: u64 = 1_100_000_000;
 pub const EXPECTED_QWEN_1_7B_BYTES: u64 = 3_300_000_000;
 
 static SERVER: Lazy<Mutex<Option<QwenServer>>> = Lazy::new(|| Mutex::new(None));
+static SERVER_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = Lazy::new(|| {
+    reqwest::blocking::Client::builder()
+        .timeout(SERVER_REQUEST_TIMEOUT)
+        .build()
+});
+static HEALTH_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = Lazy::new(|| {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(700))
+        .build()
+});
 
 struct QwenServer {
     engine: String,
@@ -159,8 +170,13 @@ pub fn transcribe_wav(
         model_for_engine(engine).ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
 
     progress_cb(5);
+    let server_attempt_started = Instant::now();
     match transcribe_with_server(app, wav_path, engine, model, language, cancel.clone()) {
         Ok(text) => {
+            tracing::info!(
+                "Qwen warm server transcription finished in {:.2}s",
+                server_attempt_started.elapsed().as_secs_f64()
+            );
             progress_cb(100);
             return Ok(text);
         }
@@ -168,7 +184,10 @@ pub fn transcribe_wav(
             if cancel.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
                 return Err(anyhow!("cancelled"));
             }
-            tracing::warn!("Qwen warm server failed, falling back to per-job CLI: {e:#}");
+            tracing::warn!(
+                "Qwen warm server failed after {:.2}s, falling back to per-job CLI: {e:#}",
+                server_attempt_started.elapsed().as_secs_f64()
+            );
         }
     }
 
@@ -191,6 +210,7 @@ pub fn transcribe_wav(
     if let Some(tok) = cancel.as_ref() {
         tok.register_pid(pid);
     }
+    let fallback_started = Instant::now();
     let output = child.wait_with_output()?;
     if let Some(tok) = cancel.as_ref() {
         tok.unregister_pid(pid);
@@ -208,6 +228,10 @@ pub fn transcribe_wav(
     }
 
     progress_cb(100);
+    tracing::info!(
+        "Qwen per-job CLI fallback finished in {:.2}s",
+        fallback_started.elapsed().as_secs_f64()
+    );
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
@@ -264,6 +288,7 @@ fn ensure_server_locked(
     let cache_dir = paths::qwen_cache_dir(app)?;
     let port = find_free_port()?;
 
+    let server_start = Instant::now();
     let mut child = qwen_server_command(&cli, &cache_dir)
         .arg("serve")
         .arg("--host")
@@ -278,6 +303,10 @@ fn ensure_server_locked(
         .context("failed to start Qwen MLX server")?;
 
     wait_for_server(&mut child, port)?;
+    tracing::info!(
+        "Qwen MLX warm server started on port {port} in {:.2}s",
+        server_start.elapsed().as_secs_f64()
+    );
 
     *guard = Some(QwenServer {
         engine: engine.to_string(),
@@ -305,9 +334,8 @@ fn post_to_server(url: &str, wav_path: &Path, model: &str, language: &str) -> Re
         form = form.text("language", qwen_language.to_string());
     }
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(SERVER_REQUEST_TIMEOUT)
-        .build()?;
+    let client = server_client()?;
+    let request_started = Instant::now();
     let response = client
         .post(format!("{url}/v1/audio/transcriptions"))
         .bearer_auth(SERVER_API_KEY)
@@ -320,11 +348,16 @@ fn post_to_server(url: &str, wav_path: &Path, model: &str, language: &str) -> Re
         return Err(anyhow!("Qwen server returned {status}: {body}"));
     }
 
-    Ok(response
+    let text = response
         .json::<TranscriptionResponse>()?
         .text
         .trim()
-        .to_string())
+        .to_string();
+    tracing::info!(
+        "Qwen warm server request finished in {:.2}s",
+        request_started.elapsed().as_secs_f64()
+    );
+    Ok(text)
 }
 
 fn qwen_language(language: &str) -> Option<&'static str> {
@@ -358,10 +391,7 @@ fn wait_for_server(child: &mut Child, port: u16) -> Result<()> {
 }
 
 fn health_ok(port: u16) -> bool {
-    let Ok(client) = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(700))
-        .build()
-    else {
+    let Ok(client) = health_client() else {
         return false;
     };
     client
@@ -369,6 +399,18 @@ fn health_ok(port: u16) -> bool {
         .send()
         .map(|r| r.status().is_success())
         .unwrap_or(false)
+}
+
+fn server_client() -> Result<&'static reqwest::blocking::Client> {
+    SERVER_CLIENT
+        .as_ref()
+        .map_err(|e| anyhow!("failed to create Qwen server HTTP client: {e}"))
+}
+
+fn health_client() -> Result<&'static reqwest::blocking::Client> {
+    HEALTH_CLIENT
+        .as_ref()
+        .map_err(|e| anyhow!("failed to create Qwen health HTTP client: {e}"))
 }
 
 fn find_free_port() -> Result<u16> {
@@ -398,7 +440,7 @@ fn model_cache_exists_in(cache_dir: &Path, engine: &str) -> bool {
         ENGINE_QWEN_1_7B => EXPECTED_QWEN_1_7B_BYTES,
         _ => return false,
     };
-    dir_size(&model_dir) >= (expected as f64 * 0.9) as u64
+    dir_size_bytes(&model_dir) >= (expected as f64 * 0.9) as u64
 }
 
 fn write_ready_marker(cache_dir: &Path, engine: &str) -> Result<()> {
@@ -427,24 +469,6 @@ fn ready_marker_path(cache_dir: &Path, engine: &str) -> Result<PathBuf> {
         "{READY_MARKER_PREFIX}-{}",
         engine.replace('.', "-")
     )))
-}
-
-fn dir_size(path: &Path) -> u64 {
-    let mut total: u64 = 0;
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if let Ok(meta) = entry.metadata() {
-            if meta.is_file() {
-                total = total.saturating_add(meta.len());
-            } else if meta.is_dir() {
-                total = total.saturating_add(dir_size(&p));
-            }
-        }
-    }
-    total
 }
 
 fn resolve_cli() -> Result<PathBuf> {

@@ -26,6 +26,19 @@ interface Props {
   onSettingsChange: (next: Settings) => void;
 }
 
+const PLAIN_TRANSCRIPT_CHAR_LIMIT = 50_000;
+const PLAIN_TRANSCRIPT_LINE_LIMIT = 300;
+
+type TranscriptView =
+  | { kind: "segments"; segments: string[] }
+  | { kind: "plain"; text: string };
+
+function countWords(text: string): number {
+  let count = 0;
+  for (const _match of text.matchAll(/\S+/g)) count += 1;
+  return count;
+}
+
 export function ResultView({
   job,
   onReset,
@@ -40,16 +53,28 @@ export function ResultView({
   const showPromoBanner =
     !settings.summarizer_enabled && !settings.summarizer_promo_seen;
 
-  const segments = useMemo(() => {
-    if (!job.text) return [] as string[];
+  const transcriptView = useMemo<TranscriptView>(() => {
+    if (!job.text) return { kind: "segments", segments: [] };
     const trimmed = job.text.trim();
+    const lineCount = (trimmed.match(/\n/g)?.length ?? 0) + 1;
+    if (
+      trimmed.length > PLAIN_TRANSCRIPT_CHAR_LIMIT ||
+      lineCount > PLAIN_TRANSCRIPT_LINE_LIMIT
+    ) {
+      return { kind: "plain", text: trimmed };
+    }
     const split = trimmed.split(/\n{2,}/g).map((s) => s.trim()).filter(Boolean);
-    if (split.length > 1) return split;
-    return trimmed
-      .split(/\n/g)
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const segments =
+      split.length > 1
+        ? split
+        : trimmed
+            .split(/\n/g)
+            .map((s) => s.trim())
+            .filter(Boolean);
+    return { kind: "segments", segments };
   }, [job.text]);
+  const segments =
+    transcriptView.kind === "segments" ? transcriptView.segments : [];
 
   const updateSettings = async (patch: Partial<Settings>) => {
     const next = { ...settings, ...patch };
@@ -169,7 +194,7 @@ export function ResultView({
     });
   };
 
-  const wordCount = (job.text ?? "").trim().split(/\s+/).filter(Boolean).length;
+  const wordCount = countWords((job.text ?? "").trim());
   const charCount = (job.text ?? "").length;
   const engine = engineLabel ?? ENGINE_LABEL.parakeet;
 
@@ -298,7 +323,9 @@ export function ResultView({
               summarizerEnabled && !transcriptExpanded ? "segments-collapsed" : ""
             }`}
           >
-            {segments.length > 0 ? (
+            {transcriptView.kind === "plain" ? (
+              <pre className="seg transcript-plain">{transcriptView.text}</pre>
+            ) : segments.length > 0 ? (
               segments.map((seg, i) => (
                 <div key={i} className="seg">
                   {seg}

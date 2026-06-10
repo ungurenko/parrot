@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
@@ -12,7 +12,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { Onboarding } from "./components/Onboarding";
 import { Toaster } from "@/components/ui/sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useJobEvents } from "./hooks/useJobEvents";
+import { jobsReducer, useJobEvents } from "./hooks/useJobEvents";
 import { useHistory } from "./hooks/useHistory";
 import { useAutoUpdate } from "./hooks/useAutoUpdate";
 import { UpdateBanner } from "./components/UpdateBanner";
@@ -96,7 +96,7 @@ function parseShortcut(shortcut: string): string[] {
 }
 
 function App() {
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobs, dispatchJobs] = useReducer(jobsReducer, []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
@@ -160,18 +160,12 @@ function App() {
   }, []);
 
   useJobEvents(
-    setJobs,
-    useCallback((j: Job) => setSelectedId(j.id), []),
+    dispatchJobs,
+    useCallback((id: string) => setSelectedId(id), []),
   );
 
   const markCanceling = useCallback((id: string) => {
-    setJobs((current) =>
-      current.map((job) =>
-        job.id === id && (job.status === "queued" || job.status === "running")
-          ? { ...job, status: "canceling" as const, stage: null }
-          : job,
-      ),
-    );
+    dispatchJobs({ type: "jobCanceling", id });
   }, []);
 
   const handleFiles = useCallback(async (paths: string[]) => {
@@ -211,10 +205,7 @@ function App() {
           summaryStatus: loaded.summary ? "done" : undefined,
           summaryPercent: loaded.summary ? 100 : undefined,
         };
-        setJobs((prev) => {
-          const without = prev.filter((j) => j.id !== rehydrated.id);
-          return [rehydrated, ...without];
-        });
+        dispatchJobs({ type: "historyLoaded", job: rehydrated });
         setSelectedId(rehydrated.id);
       } catch (e) {
         toast.error("Не удалось открыть запись", { description: String(e) });
