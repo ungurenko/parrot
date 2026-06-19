@@ -21,6 +21,7 @@ import {
   listenInTauri,
 } from "./lib/runtime";
 import {
+  DEFAULT_SUMMARY_MODEL,
   ENGINE_LABEL,
   type DictationPhase,
   type DictationStatus,
@@ -39,6 +40,7 @@ const BROWSER_PREVIEW_SETTINGS: Settings = {
   engine: "parakeet",
   language: "auto",
   summarizer_enabled: false,
+  summary_model: DEFAULT_SUMMARY_MODEL,
   summarizer_promo_seen: true,
   dictation_enabled: true,
   dictation_hold_key: "Alt+Space",

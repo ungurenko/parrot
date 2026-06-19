@@ -86,6 +86,7 @@ export interface Settings {
   engine: Engine;
   language: TranscriptLanguage;
   summarizer_enabled: boolean;
+  summary_model: SummaryModel;
   summarizer_promo_seen: boolean;
   dictation_enabled: boolean;
   dictation_hold_key: string;
@@ -108,8 +109,29 @@ export interface DictationStatus {
   lastError?: string | null;
 }
 
-export const SUMMARIZER_MODEL_LABEL = "Qwen 3-4B Instruct (конспект)";
-export const SUMMARIZER_MODEL_SIZE = "~2.3 ГБ";
+export type SummaryModel = "qwen3-4b" | "gemma4-e2b";
+
+export const SUMMARY_MODEL_LABEL: Record<SummaryModel, string> = {
+  "qwen3-4b": "Qwen 3-4B Instruct",
+  "gemma4-e2b": "Gemma 4 E2B-it",
+};
+
+export const SUMMARY_MODEL_SIZE: Record<SummaryModel, string> = {
+  "qwen3-4b": "~2.3 ГБ",
+  "gemma4-e2b": "~3.6 ГБ",
+};
+
+export const SUMMARY_MODEL_BADGE: Record<SummaryModel, string> = {
+  "qwen3-4b": "стабильная",
+  "gemma4-e2b": "новая",
+};
+
+export const DEFAULT_SUMMARY_MODEL: SummaryModel = "qwen3-4b";
+
+export const selectedSummaryModelLabel = (model: SummaryModel) => SUMMARY_MODEL_LABEL[model];
+export const selectedSummaryModelSize = (model: SummaryModel) => SUMMARY_MODEL_SIZE[model];
+export const SUMMARIZER_MODEL_LABEL = selectedSummaryModelLabel(DEFAULT_SUMMARY_MODEL);
+export const SUMMARIZER_MODEL_SIZE = selectedSummaryModelSize(DEFAULT_SUMMARY_MODEL);
 
 export interface HistoryEntry {
   id: string;
