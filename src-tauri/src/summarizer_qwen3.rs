@@ -945,7 +945,7 @@ fn extract_tar_gz(archive: &Path, dest_parent: &Path) -> Result<()> {
 }
 
 /// Bootstrap the user-space MLX venv: ensure Python is downloaded, create
-/// the venv, upgrade pip, install mlx-lm. Idempotent — if everything is
+/// the venv, upgrade pip, install MLX runtimes. Idempotent — if everything is
 /// already present, returns quickly. Streams progress lines via `on_progress`.
 pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -> Result<()> {
     // Step 0 — ensure standalone Python is on disk (downloads on first run).
@@ -990,41 +990,45 @@ pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -
         .stderr(Stdio::piped())
         .output();
 
-    // Step 3 — install mlx-lm (the only Python dep the summarizer needs).
-    on_progress("Устанавливаю mlx-lm (~50 МБ)…");
+    // Step 3 — install MLX runtimes for Qwen and Gemma summaries.
+    on_progress("Устанавливаю MLX для Qwen и Gemma…");
     let out = Command::new(&venv_python)
         .args([
             "-m",
             "pip",
             "install",
             "--disable-pip-version-check",
-            "mlx-lm>=0.24.0",
+            "mlx-lm>=0.26.2",
+            "mlx-vlm>=0.4.3",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .context("Не удалось запустить pip install mlx-lm")?;
+        .context("Не удалось запустить pip install mlx-lm/mlx-vlm")?;
     if !out.status.success() {
         return Err(command_error(
-            "pip install mlx-lm завершился с ошибкой",
+            "pip install mlx-lm/mlx-vlm завершился с ошибкой",
             &out.stderr,
             out.status.code(),
         ));
     }
 
-    // Step 4 — sanity check: import mlx_lm.
+    // Step 4 — sanity check: import both runtimes.
     on_progress("Проверяю установку…");
     let out = Command::new(&venv_python)
-        .args(["-c", "import mlx_lm; print(mlx_lm.__version__)"])
+        .args([
+            "-c",
+            "import mlx_lm, mlx_vlm; print('mlx_lm ok'); print('mlx_vlm ok')",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .context("Не удалось проверить mlx_lm")?;
+        .context("Не удалось проверить mlx_lm/mlx_vlm")?;
     if !out.status.success() {
         return Err(command_error(
-            "mlx_lm не импортируется после установки",
+            "mlx_lm или mlx_vlm не импортируется после установки",
             &out.stderr,
             out.status.code(),
         ));
