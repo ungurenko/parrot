@@ -14,7 +14,7 @@ fi
 "$PYTHON_BIN" -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
 "$VENV_DIR/bin/python" -m pip install "mlx-qwen3-asr[serve]"
-"$VENV_DIR/bin/python" -m pip install "mlx-lm>=0.26.2" "mlx-vlm>=0.4.3"
+"$VENV_DIR/bin/python" -m pip install "mlx==0.31.1" "mlx-lm==0.31.2" "mlx-vlm==0.4.3"
 
 HF_HOME="$ROOT_DIR/.qwen-mlx/cache" \
 HF_HUB_DISABLE_XET=1 \

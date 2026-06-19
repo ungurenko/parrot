@@ -622,7 +622,8 @@ fn build_mlx_vlm_generate_command(
         .arg("--max-tokens")
         .arg(request.max_tokens.to_string())
         .arg("--temperature")
-        .arg(request.temp.unwrap_or(SUMMARY_TEMP).to_string());
+        .arg(request.temp.unwrap_or(SUMMARY_TEMP).to_string())
+        .arg("--verbose");
     if let Some(top_p) = request.top_p {
         command.arg("--top-p").arg(top_p.to_string());
     }
@@ -679,8 +680,6 @@ fn build_mlx_vlm_server_command(
         .arg(SERVER_HOST)
         .arg("--port")
         .arg(port.to_string())
-        .arg("--log-level")
-        .arg("ERROR")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     command
@@ -700,16 +699,16 @@ fn mlx_lm_command(python: &Path, cache_dir: &Path) -> Command {
 }
 
 fn mlx_vlm_generate_command(python: &Path, cache_dir: &Path) -> Command {
-    mlx_vlm_module_command(python, cache_dir, "mlx_vlm.generate")
+    mlx_vlm_command(python, cache_dir, "generate")
 }
 
 fn mlx_vlm_server_command(python: &Path, cache_dir: &Path) -> Command {
-    mlx_vlm_module_command(python, cache_dir, "mlx_vlm.server")
+    mlx_vlm_command(python, cache_dir, "server")
 }
 
-fn mlx_vlm_module_command(python: &Path, cache_dir: &Path, module: &str) -> Command {
+fn mlx_vlm_command(python: &Path, cache_dir: &Path, subcommand: &str) -> Command {
     let mut cmd = Command::new(python);
-    cmd.arg("-m").arg(module);
+    cmd.arg("-m").arg("mlx_vlm").arg(subcommand);
     cmd.env("HF_HOME", cache_dir)
         .env("HF_HUB_DISABLE_TELEMETRY", "1")
         .env("HF_HUB_DISABLE_XET", "1")
@@ -1005,8 +1004,9 @@ pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -
             "pip",
             "install",
             "--disable-pip-version-check",
-            "mlx-lm>=0.26.2",
-            "mlx-vlm>=0.4.3",
+            "mlx==0.31.1",
+            "mlx-lm==0.31.2",
+            "mlx-vlm==0.4.3",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1196,7 +1196,8 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
 
-        assert!(args.windows(2).any(|pair| pair == ["-m", "mlx_vlm.server"]));
+        assert!(args.windows(2).any(|pair| pair == ["-m", "mlx_vlm"]));
+        assert!(args.iter().any(|arg| arg == "server"));
         assert!(args
             .windows(2)
             .any(|pair| pair == ["--model", crate::summarizer_models::GEMMA4_E2B_SUMMARY.repo]));
