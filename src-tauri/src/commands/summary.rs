@@ -112,6 +112,7 @@ pub(crate) async fn download_summarizer_model(
     result?;
     let _ = app.emit("summary_model:stage", "ready");
     let _ = app.emit("summary_model:progress", 100u32);
+    summarizer_qwen3::preload_server(app.clone());
     Ok(())
 }
 

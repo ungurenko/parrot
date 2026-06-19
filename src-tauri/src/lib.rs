@@ -98,7 +98,10 @@ fn set_settings(
     }
     settings::save(&app, &new).map_err(|e| e.to_string())?;
     if old.engine != new.engine {
-        preload_active_engine(app);
+        preload_active_engine(app.clone());
+    }
+    if new.summarizer_enabled && !old.summarizer_enabled {
+        summarizer_qwen3::preload_server(app.clone());
     }
     Ok(())
 }
@@ -282,6 +285,7 @@ pub fn run() {
                     if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                         binaries::stop_yt_dlp_startup_cache();
                         transcriber_qwen::stop_server();
+                        summarizer_qwen3::stop_server();
                         // Kill any running mlx-lm summarization subprocess so we
                         // don't leave a zombie Python process after window close.
                         summary_cancel_for_close.cancel_all();
@@ -291,6 +295,9 @@ pub fn run() {
             }
 
             preload_active_engine(handle.clone());
+            if s.summarizer_enabled {
+                summarizer_qwen3::preload_server(handle.clone());
+            }
             binaries::warm_yt_dlp_startup_cache(handle.clone());
             dictation.start_worker(handle.clone());
             if let Err(e) = dictation.apply_settings(&handle, &s) {
