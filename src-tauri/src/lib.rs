@@ -10,6 +10,7 @@ mod prompts;
 mod queue;
 mod settings;
 mod source;
+mod summarizer_models;
 mod summarizer_qwen3;
 mod transcriber;
 mod transcriber_parakeet;
