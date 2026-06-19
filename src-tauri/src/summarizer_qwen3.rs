@@ -16,8 +16,9 @@ use tauri::AppHandle;
 
 use crate::cancellation::CancelToken;
 use crate::fs_metrics::dir_size_bytes;
-use crate::paths;
 use crate::prompts;
+use crate::{paths, settings, summarizer_models};
+use summarizer_models::{SummaryModelSpec, SummaryRuntime};
 
 // Pinned standalone Python release from astral-sh/python-build-standalone.
 // To update: pick newer tag at https://github.com/astral-sh/python-build-standalone/releases,
@@ -34,9 +35,8 @@ const SERVER_START_TIMEOUT: Duration = Duration::from_secs(90);
 const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(700);
 
-pub const SUMMARY_MODEL_REPO: &str = "mlx-community/Qwen3-4B-Instruct-2507-4bit";
-pub const EXPECTED_SUMMARY_BYTES: u64 = 2_300_000_000;
-const READY_MARKER: &str = ".parrot-ready-summary";
+const LEGACY_QWEN_READY_MARKER: &str = ".parrot-ready-summary";
+pub const EXPECTED_SUMMARY_BYTES: u64 = 2_262_920_192;
 
 const SUMMARY_MAX_TOKENS: u32 = 4096;
 const SUMMARY_TEMP: f32 = 0.3;
@@ -55,6 +55,8 @@ static HEALTH_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = 
 });
 
 struct SummaryServer {
+    model_id: &'static str,
+    runtime: SummaryRuntime,
     port: u16,
     child: Child,
 }
@@ -99,30 +101,38 @@ pub fn is_ready(app: &AppHandle) -> bool {
     resolve_python(app).is_ok() && model_cache_exists(app)
 }
 
+fn selected_model(app: &AppHandle) -> &'static SummaryModelSpec {
+    let settings = settings::load(app);
+    summarizer_models::summary_model_spec(&settings.summary_model)
+        .unwrap_or(&summarizer_models::QWEN3_4B_SUMMARY)
+}
+
 pub fn model_cache_exists(app: &AppHandle) -> bool {
     let Ok(cache_dir) = paths::qwen_cache_dir(app) else {
         return false;
     };
-    if !ready_marker_exists(&cache_dir) {
+    let spec = selected_model(app);
+    if !ready_marker_exists_for(&cache_dir, spec) {
         return false;
     }
-    model_cache_exists_in(&cache_dir)
+    model_cache_exists_in(&cache_dir, spec)
 }
 
-fn model_cache_exists_in(cache_dir: &Path) -> bool {
-    let repo_cache_name = format!("models--{}", SUMMARY_MODEL_REPO.replace('/', "--"));
+fn model_cache_exists_in(cache_dir: &Path, spec: &SummaryModelSpec) -> bool {
+    let repo_cache_name = format!("models--{}", spec.repo.replace('/', "--"));
     let model_dir = cache_dir.join("hub").join(repo_cache_name);
     if !model_dir.exists() {
         return false;
     }
-    dir_size_bytes(&model_dir) >= (EXPECTED_SUMMARY_BYTES as f64 * 0.9) as u64
+    dir_size_bytes(&model_dir) >= (spec.expected_bytes as f64 * 0.9) as u64
 }
 
 pub fn delete_model(app: &AppHandle) -> Result<()> {
     stop_server();
     let cache_dir = paths::qwen_cache_dir(app)?;
-    remove_ready_marker(&cache_dir);
-    let repo_cache_name = format!("models--{}", SUMMARY_MODEL_REPO.replace('/', "--"));
+    let spec = selected_model(app);
+    remove_ready_marker_for(&cache_dir, spec);
+    let repo_cache_name = format!("models--{}", spec.repo.replace('/', "--"));
     let model_dir = cache_dir.join("hub").join(repo_cache_name);
     if model_dir.is_dir() {
         std::fs::remove_dir_all(&model_dir)?;
@@ -136,8 +146,10 @@ pub fn warmup_model(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<()> {
         anyhow::bail!("cancelled");
     }
     let started = Instant::now();
-    run_mlx_lm_generate(
+    let spec = selected_model(app);
+    run_summary_generate(
         app,
+        spec,
         MlxLmGenerateRequest {
             prompt_arg: Some("Привет"),
             max_tokens: 4,
@@ -147,11 +159,12 @@ pub fn warmup_model(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<()> {
         "Не удалось подготовить модель конспекта",
     )?;
     tracing::info!(
-        "summary model warmup finished in {:.2}s",
+        "summary model warmup finished for {} in {:.2}s",
+        spec.id,
         started.elapsed().as_secs_f64()
     );
     let cache_dir = paths::qwen_cache_dir(app)?;
-    write_ready_marker(&cache_dir)?;
+    write_ready_marker_for(&cache_dir, spec)?;
     Ok(())
 }
 
@@ -163,6 +176,7 @@ pub fn generate_summary(
     let system_prompt = prompts::SUMMARY_SYSTEM_PROMPT;
     let user_prompt = prompts::build_summary_user_prompt(transcript);
     let started = Instant::now();
+    let spec = selected_model(app);
 
     let text = match generate_summary_with_server(app, system_prompt, &user_prompt, cancel.clone())
     {
@@ -179,11 +193,13 @@ pub fn generate_summary(
                 return Err(anyhow!("cancelled"));
             }
             tracing::warn!(
-                "summary warm server failed after {:.2}s, falling back to per-job mlx-lm: {e:#}",
-                started.elapsed().as_secs_f64()
+                "summary warm server failed after {:.2}s, falling back to per-job summary runtime for {}: {e:#}",
+                started.elapsed().as_secs_f64(),
+                spec.id
             );
-            run_mlx_lm_generate(
+            run_summary_generate(
                 app,
+                spec,
                 MlxLmGenerateRequest {
                     system_prompt: Some(system_prompt),
                     prompt_stdin: Some(&user_prompt),
@@ -226,8 +242,13 @@ fn generate_summary_with_server(
 
 fn ensure_summary_server(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<(String, u32, bool)> {
     let mut guard = SUMMARY_SERVER.lock();
+    let spec = selected_model(app);
     if let Some(server) = guard.as_mut() {
-        if server.child.try_wait()?.is_none() && health_ok(server.port) {
+        if server.model_id == spec.id
+            && server.runtime == spec.runtime
+            && server.child.try_wait()?.is_none()
+            && health_ok(server.port)
+        {
             return Ok((server.url(), server.pid(), true));
         }
     }
@@ -245,9 +266,9 @@ fn ensure_summary_server(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<(S
     let port = find_free_port()?;
 
     let server_start = Instant::now();
-    let mut child = build_mlx_lm_server_command(&python, &cache_dir, port)
+    let mut child = build_summary_server_command(&python, &cache_dir, spec, port)
         .spawn()
-        .context("Не удалось запустить mlx-lm server")?;
+        .context("Не удалось запустить сервер модели конспекта")?;
 
     let pid = child.id();
     cancel.register_pid(pid);
@@ -260,11 +281,17 @@ fn ensure_summary_server(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<(S
     }
 
     tracing::info!(
-        "summary warm server started on port {port} in {:.2}s",
+        "summary warm server started for {} on port {port} in {:.2}s",
+        spec.id,
         server_start.elapsed().as_secs_f64()
     );
 
-    *guard = Some(SummaryServer { port, child });
+    *guard = Some(SummaryServer {
+        model_id: spec.id,
+        runtime: spec.runtime,
+        port,
+        child,
+    });
     let server = guard.as_ref().expect("summary server just inserted");
     Ok((server.url(), server.pid(), false))
 }
@@ -316,21 +343,26 @@ fn post_to_summary_server(
 fn warm_summary_server(url: &str) -> Result<()> {
     let client = server_client()?;
     let response = client
-        .post(format!("{url}/v1/completions"))
-        .json(&SummaryWarmupRequest {
-            prompt: "Привет",
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&SummaryServerRequest {
+            messages: vec![SummaryChatMessage {
+                role: "user",
+                content: "Привет",
+            }],
             max_tokens: 4,
             temperature: SUMMARY_TEMP,
             top_p: SUMMARY_TOP_P,
             stream: false,
         })
         .send()
-        .context("Не удалось прогреть mlx-lm server")?;
+        .context("Не удалось прогреть сервер модели конспекта")?;
 
     let status = response.status();
     if !status.is_success() {
         let body = response.text().unwrap_or_default();
-        return Err(anyhow!("mlx-lm server warmup вернул {status}: {body}"));
+        return Err(anyhow!(
+            "Сервер модели конспекта на warmup вернул {status}: {body}"
+        ));
     }
     let _ = response.bytes()?;
     Ok(())
@@ -367,7 +399,7 @@ fn post_to_summary_server_inner(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().unwrap_or_default();
-        return Err(anyhow!("mlx-lm server вернул {status}: {body}"));
+        return Err(anyhow!("Сервер модели конспекта вернул {status}: {body}"));
     }
 
     read_summary_stream(response, cancel)
@@ -376,15 +408,6 @@ fn post_to_summary_server_inner(
 #[derive(Serialize)]
 struct SummaryServerRequest<'a> {
     messages: Vec<SummaryChatMessage<'a>>,
-    max_tokens: u32,
-    temperature: f32,
-    top_p: f32,
-    stream: bool,
-}
-
-#[derive(Serialize)]
-struct SummaryWarmupRequest<'a> {
-    prompt: &'a str,
     max_tokens: u32,
     temperature: f32,
     top_p: f32,
@@ -484,8 +507,9 @@ impl Default for MlxLmGenerateRequest<'_> {
     }
 }
 
-fn run_mlx_lm_generate(
+fn run_summary_generate(
     app: &AppHandle,
+    spec: &SummaryModelSpec,
     request: MlxLmGenerateRequest<'_>,
     cancel: Arc<CancelToken>,
     error_prefix: &str,
@@ -493,21 +517,21 @@ fn run_mlx_lm_generate(
     let python = resolve_python(app)?;
     let cache_dir = paths::qwen_cache_dir(app)?;
 
-    let mut child = build_mlx_lm_generate_command(&python, &cache_dir, &request)
+    let mut child = build_summary_generate_command(&python, &cache_dir, spec, &request)
         .spawn()
-        .context("Не удалось запустить mlx-lm")?;
+        .context("Не удалось запустить модель конспекта")?;
 
     let pid = child.id();
     cancel.register_pid(pid);
 
-    if let Some(prompt) = request.prompt_stdin {
+    if let (SummaryRuntime::MlxLm, Some(prompt)) = (spec.runtime, request.prompt_stdin) {
         let mut stdin = child
             .stdin
             .take()
-            .ok_or_else(|| anyhow!("mlx-lm не открыл stdin"))?;
+            .ok_or_else(|| anyhow!("Модель конспекта не открыла stdin"))?;
         stdin
             .write_all(prompt.as_bytes())
-            .context("Не удалось передать промпт в stdin mlx-lm")?;
+            .context("Не удалось передать промпт в stdin модели конспекта")?;
         drop(stdin);
     }
 
@@ -528,16 +552,26 @@ fn run_mlx_lm_generate(
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn build_summary_generate_command(
+    python: &Path,
+    cache_dir: &Path,
+    spec: &SummaryModelSpec,
+    request: &MlxLmGenerateRequest<'_>,
+) -> Command {
+    match spec.runtime {
+        SummaryRuntime::MlxLm => build_mlx_lm_generate_command(python, cache_dir, spec, request),
+        SummaryRuntime::MlxVlm => build_mlx_vlm_generate_command(python, cache_dir, spec, request),
+    }
+}
+
 fn build_mlx_lm_generate_command(
     python: &Path,
     cache_dir: &Path,
+    spec: &SummaryModelSpec,
     request: &MlxLmGenerateRequest<'_>,
 ) -> Command {
     let mut command = mlx_lm_command(python, cache_dir);
-    command
-        .arg("generate")
-        .arg("--model")
-        .arg(SUMMARY_MODEL_REPO);
+    command.arg("generate").arg("--model").arg(spec.repo);
     if let Some(system_prompt) = request.system_prompt {
         command.arg("--system-prompt").arg(system_prompt);
     }
@@ -561,12 +595,56 @@ fn build_mlx_lm_generate_command(
     command
 }
 
-fn build_mlx_lm_server_command(python: &Path, cache_dir: &Path, port: u16) -> Command {
+fn build_mlx_vlm_generate_command(
+    python: &Path,
+    cache_dir: &Path,
+    spec: &SummaryModelSpec,
+    request: &MlxLmGenerateRequest<'_>,
+) -> Command {
+    let mut command = mlx_vlm_generate_command(python, cache_dir);
+    command.arg("--model").arg(spec.repo);
+    if let Some(system_prompt) = request.system_prompt {
+        command.arg("--system").arg(system_prompt);
+    }
+    if let Some(prompt_arg) = request.prompt_arg {
+        command.arg("--prompt").arg(prompt_arg);
+    } else if let Some(prompt_stdin) = request.prompt_stdin {
+        command.arg("--prompt").arg(prompt_stdin);
+    }
+    command
+        .arg("--max-tokens")
+        .arg(request.max_tokens.to_string())
+        .arg("--temperature")
+        .arg(request.temp.unwrap_or(SUMMARY_TEMP).to_string());
+    if let Some(top_p) = request.top_p {
+        command.arg("--top-p").arg(top_p.to_string());
+    }
+    command
+}
+
+fn build_summary_server_command(
+    python: &Path,
+    cache_dir: &Path,
+    spec: &SummaryModelSpec,
+    port: u16,
+) -> Command {
+    match spec.runtime {
+        SummaryRuntime::MlxLm => build_mlx_lm_server_command(python, cache_dir, spec, port),
+        SummaryRuntime::MlxVlm => build_mlx_vlm_server_command(python, cache_dir, spec, port),
+    }
+}
+
+fn build_mlx_lm_server_command(
+    python: &Path,
+    cache_dir: &Path,
+    spec: &SummaryModelSpec,
+    port: u16,
+) -> Command {
     let mut command = mlx_lm_command(python, cache_dir);
     command
         .arg("server")
         .arg("--model")
-        .arg(SUMMARY_MODEL_REPO)
+        .arg(spec.repo)
         .arg("--host")
         .arg(SERVER_HOST)
         .arg("--port")
@@ -580,9 +658,51 @@ fn build_mlx_lm_server_command(python: &Path, cache_dir: &Path, port: u16) -> Co
     command
 }
 
+fn build_mlx_vlm_server_command(
+    python: &Path,
+    cache_dir: &Path,
+    spec: &SummaryModelSpec,
+    port: u16,
+) -> Command {
+    let mut command = mlx_vlm_server_command(python, cache_dir);
+    command
+        .arg("--model")
+        .arg(spec.repo)
+        .arg("--host")
+        .arg(SERVER_HOST)
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--log-level")
+        .arg("ERROR")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
 fn mlx_lm_command(python: &Path, cache_dir: &Path) -> Command {
     let mut cmd = Command::new(python);
     cmd.arg("-m").arg("mlx_lm");
+    cmd.env("HF_HOME", cache_dir)
+        .env("HF_HUB_DISABLE_TELEMETRY", "1")
+        .env("HF_HUB_DISABLE_XET", "1")
+        .env("PYTHONUNBUFFERED", "1");
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd
+}
+
+fn mlx_vlm_generate_command(python: &Path, cache_dir: &Path) -> Command {
+    mlx_vlm_module_command(python, cache_dir, "mlx_vlm.generate")
+}
+
+fn mlx_vlm_server_command(python: &Path, cache_dir: &Path) -> Command {
+    mlx_vlm_module_command(python, cache_dir, "mlx_vlm.server")
+}
+
+fn mlx_vlm_module_command(python: &Path, cache_dir: &Path, module: &str) -> Command {
+    let mut cmd = Command::new(python);
+    cmd.arg("-m").arg(module);
     cmd.env("HF_HOME", cache_dir)
         .env("HF_HUB_DISABLE_TELEMETRY", "1")
         .env("HF_HUB_DISABLE_XET", "1")
@@ -914,17 +1034,24 @@ pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -
     Ok(())
 }
 
-fn write_ready_marker(cache_dir: &Path) -> Result<()> {
-    std::fs::write(cache_dir.join(READY_MARKER), b"ok")?;
+fn ready_marker_exists_for(cache_dir: &Path, spec: &SummaryModelSpec) -> bool {
+    if cache_dir.join(spec.ready_marker).is_file() {
+        return true;
+    }
+    spec.id == summarizer_models::QWEN3_4B_SUMMARY.id
+        && cache_dir.join(LEGACY_QWEN_READY_MARKER).is_file()
+}
+
+fn write_ready_marker_for(cache_dir: &Path, spec: &SummaryModelSpec) -> Result<()> {
+    std::fs::write(cache_dir.join(spec.ready_marker), b"ok")?;
     Ok(())
 }
 
-fn remove_ready_marker(cache_dir: &Path) {
-    let _ = std::fs::remove_file(cache_dir.join(READY_MARKER));
-}
-
-fn ready_marker_exists(cache_dir: &Path) -> bool {
-    cache_dir.join(READY_MARKER).is_file()
+fn remove_ready_marker_for(cache_dir: &Path, spec: &SummaryModelSpec) {
+    let _ = std::fs::remove_file(cache_dir.join(spec.ready_marker));
+    if spec.id == summarizer_models::QWEN3_4B_SUMMARY.id {
+        let _ = std::fs::remove_file(cache_dir.join(LEGACY_QWEN_READY_MARKER));
+    }
 }
 
 fn command_error(prefix: &str, stderr: &[u8], code: Option<i32>) -> anyhow::Error {
@@ -957,16 +1084,45 @@ mod tests {
     }
 
     #[test]
-    fn ready_marker_controls_summary_readiness() {
+    fn ready_marker_controls_summary_readiness_per_model() {
         let dir = temp_dir("marker");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
 
-        assert!(!ready_marker_exists(&dir));
-        write_ready_marker(&dir).expect("write marker");
-        assert!(ready_marker_exists(&dir));
-        remove_ready_marker(&dir);
-        assert!(!ready_marker_exists(&dir));
+        assert!(!ready_marker_exists_for(
+            &dir,
+            &crate::summarizer_models::GEMMA4_E2B_SUMMARY
+        ));
+        write_ready_marker_for(&dir, &crate::summarizer_models::GEMMA4_E2B_SUMMARY)
+            .expect("write marker");
+        assert!(ready_marker_exists_for(
+            &dir,
+            &crate::summarizer_models::GEMMA4_E2B_SUMMARY
+        ));
+        remove_ready_marker_for(&dir, &crate::summarizer_models::GEMMA4_E2B_SUMMARY);
+        assert!(!ready_marker_exists_for(
+            &dir,
+            &crate::summarizer_models::GEMMA4_E2B_SUMMARY
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn qwen_legacy_marker_should_keep_summary_readiness() {
+        let dir = temp_dir("legacy-marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(dir.join(".parrot-ready-summary"), b"ok").expect("legacy marker");
+
+        assert!(ready_marker_exists_for(
+            &dir,
+            &crate::summarizer_models::QWEN3_4B_SUMMARY
+        ));
+        assert!(!ready_marker_exists_for(
+            &dir,
+            &crate::summarizer_models::GEMMA4_E2B_SUMMARY
+        ));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -995,9 +1151,13 @@ mod tests {
     }
 
     #[test]
-    fn summary_server_command_uses_same_model_and_local_host() {
-        let command =
-            build_mlx_lm_server_command(Path::new("/tmp/python"), Path::new("/tmp/cache"), 18181);
+    fn qwen_summary_server_command_uses_mlx_lm() {
+        let command = build_mlx_lm_server_command(
+            Path::new("/tmp/python"),
+            Path::new("/tmp/cache"),
+            &crate::summarizer_models::QWEN3_4B_SUMMARY,
+            18181,
+        );
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -1007,8 +1167,29 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "server"));
         assert!(args
             .windows(2)
-            .any(|pair| pair == ["--model", SUMMARY_MODEL_REPO]));
+            .any(|pair| pair == ["--model", crate::summarizer_models::QWEN3_4B_SUMMARY.repo]));
         assert!(args.windows(2).any(|pair| pair == ["--host", SERVER_HOST]));
         assert!(args.windows(2).any(|pair| pair == ["--port", "18181"]));
+    }
+
+    #[test]
+    fn gemma_summary_server_command_uses_mlx_vlm() {
+        let command = build_mlx_vlm_server_command(
+            Path::new("/tmp/python"),
+            Path::new("/tmp/cache"),
+            &crate::summarizer_models::GEMMA4_E2B_SUMMARY,
+            18182,
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.windows(2).any(|pair| pair == ["-m", "mlx_vlm.server"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--model", crate::summarizer_models::GEMMA4_E2B_SUMMARY.repo]));
+        assert!(args.windows(2).any(|pair| pair == ["--host", SERVER_HOST]));
+        assert!(args.windows(2).any(|pair| pair == ["--port", "18182"]));
     }
 }
