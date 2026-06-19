@@ -41,7 +41,16 @@ import {
   isTauriRuntime,
   listenInTauri,
 } from "@/lib/runtime";
-import { DownloadIcon, Trash2Icon } from "lucide-react";
+import {
+  DatabaseIcon,
+  DownloadIcon,
+  FileTextIcon,
+  KeyboardIcon,
+  RefreshCwIcon,
+  SettingsIcon,
+  Trash2Icon,
+  type LucideIcon,
+} from "lucide-react";
 
 import type { AutoUpdate } from "../hooks/useAutoUpdate";
 
@@ -99,12 +108,42 @@ const PREVIEW_ENGINE_STATUSES: EngineStatuses = {
   },
 };
 
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
-  { id: "basic", label: "Основное" },
-  { id: "models", label: "Модели" },
-  { id: "dictation", label: "Диктовка" },
-  { id: "summary", label: "Конспект" },
-  { id: "updates", label: "Обновления" },
+const SETTINGS_TABS: Array<{
+  id: SettingsTab;
+  label: string;
+  hint: string;
+  Icon: LucideIcon;
+}> = [
+  {
+    id: "basic",
+    label: "Основное",
+    hint: "Папка и язык",
+    Icon: SettingsIcon,
+  },
+  {
+    id: "models",
+    label: "Модели",
+    hint: "Распознавание",
+    Icon: DatabaseIcon,
+  },
+  {
+    id: "dictation",
+    label: "Диктовка",
+    hint: "Клавиши и доступ",
+    Icon: KeyboardIcon,
+  },
+  {
+    id: "summary",
+    label: "Конспект",
+    hint: "Локальный LLM",
+    Icon: FileTextIcon,
+  },
+  {
+    id: "updates",
+    label: "Обновления",
+    hint: "Версия и логи",
+    Icon: RefreshCwIcon,
+  },
 ];
 
 interface ModelSettingsSectionProps {
@@ -173,20 +212,27 @@ interface SettingsTabsProps {
 
 function SettingsTabs({ active, onChange }: SettingsTabsProps) {
   return (
-    <div className="settings-tabs" role="tablist" aria-label="Разделы настроек">
-      {SETTINGS_TABS.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          role="tab"
-          aria-selected={active === tab.id}
-          className={cn("settings-tab", active === tab.id && "active")}
-          onClick={() => onChange(tab.id)}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </div>
+    <nav className="settings-nav" role="tablist" aria-label="Разделы настроек">
+      {SETTINGS_TABS.map(({ Icon, ...tab }) => {
+        const selected = active === tab.id;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            className={cn("settings-nav-item", selected && "active")}
+            onClick={() => onChange(tab.id)}
+          >
+            <Icon className="settings-nav-icon" aria-hidden="true" />
+            <span className="settings-nav-copy">
+              <span className="settings-nav-label">{tab.label}</span>
+              <span className="settings-nav-hint">{tab.hint}</span>
+            </span>
+          </button>
+        );
+      })}
+    </nav>
   );
 }
 
@@ -444,7 +490,7 @@ function SummarySettingsSection({
 }: SummarySettingsSectionProps) {
   return (
     <Field className="min-w-0">
-      <FieldLabel>🪶 Конспект</FieldLabel>
+      <FieldLabel>Конспект</FieldLabel>
       <label className="summary-toggle">
         <input
           type="checkbox"
@@ -1068,83 +1114,85 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
         if (!openState) onClose();
       }}
     >
-      <DialogContent className="glass-modal flex max-h-[85vh] min-h-0 w-[min(620px,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+      <DialogContent className="glass-modal settings-modal-shell flex max-h-[90vh] min-h-0 w-[min(780px,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
         <DialogHeader className="modal-band-top min-w-0 shrink-0 p-5 pr-12">
-          <DialogTitle>⚙️ Настройки</DialogTitle>
+          <DialogTitle>Настройки</DialogTitle>
           <DialogDescription>
             Базовые параметры, модели и дополнительные функции.
           </DialogDescription>
         </DialogHeader>
 
-        <SettingsTabs active={activeTab} onChange={setActiveTab} />
+        <div className="settings-layout min-h-0 min-w-0 flex-1">
+          <SettingsTabs active={activeTab} onChange={setActiveTab} />
 
-        <FieldGroup className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-5">
-          {activeTab === "basic" && (
-            <>
-              <SaveFolderSection saveDir={settings.save_dir} onPickFolder={pickFolder} />
-              <LanguageSettingsSection
-                language={settings.language}
-                onLanguageChange={changeLanguage}
+          <FieldGroup className="settings-content min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+            {activeTab === "basic" && (
+              <>
+                <SaveFolderSection saveDir={settings.save_dir} onPickFolder={pickFolder} />
+                <LanguageSettingsSection
+                  language={settings.language}
+                  onLanguageChange={changeLanguage}
+                />
+              </>
+            )}
+
+            {activeTab === "models" && (
+              <ModelSettingsSection
+                settings={settings}
+                modelStatuses={modelStatuses}
+                busyEngine={busyEngine}
+                deletingEngine={deletingEngine}
+                modelProgress={modelProgress}
+                modelProgressDetail={modelProgressDetail}
+                modelStage={modelStage}
+                hasActiveJob={hasActiveJob}
+                modelError={modelError}
+                onEngineChange={changeEngine}
+                onPrepareModel={prepareModel}
+                onDeleteModel={deleteModel}
               />
-            </>
-          )}
+            )}
 
-          {activeTab === "models" && (
-            <ModelSettingsSection
-              settings={settings}
-              modelStatuses={modelStatuses}
-              busyEngine={busyEngine}
-              deletingEngine={deletingEngine}
-              modelProgress={modelProgress}
-              modelProgressDetail={modelProgressDetail}
-              modelStage={modelStage}
-              hasActiveJob={hasActiveJob}
-              modelError={modelError}
-              onEngineChange={changeEngine}
-              onPrepareModel={prepareModel}
-              onDeleteModel={deleteModel}
-            />
-          )}
+            {activeTab === "dictation" && (
+              <DictationSettingsSection
+                settings={settings}
+                capturingShortcut={capturingShortcut}
+                shortcutHint={shortcutHint}
+                accessibilityPermission={accessibilityPermission}
+                onStartCapture={() => {
+                  setCapturingShortcut(true);
+                  setShortcutHint("Нажмите новое сочетание клавиш…");
+                }}
+                onCaptureShortcut={captureDictationShortcut}
+                onStopCapture={() => setCapturingShortcut(false)}
+                onVerifyAccessibility={verifyAccessibilityPermission}
+                onRequestAccessibility={requestAccessibilityPermission}
+                onToggleDictation={toggleDictation}
+              />
+            )}
 
-          {activeTab === "dictation" && (
-            <DictationSettingsSection
-              settings={settings}
-              capturingShortcut={capturingShortcut}
-              shortcutHint={shortcutHint}
-              accessibilityPermission={accessibilityPermission}
-              onStartCapture={() => {
-                setCapturingShortcut(true);
-                setShortcutHint("Нажмите новое сочетание клавиш…");
-              }}
-              onCaptureShortcut={captureDictationShortcut}
-              onStopCapture={() => setCapturingShortcut(false)}
-              onVerifyAccessibility={verifyAccessibilityPermission}
-              onRequestAccessibility={requestAccessibilityPermission}
-              onToggleDictation={toggleDictation}
-            />
-          )}
+            {activeTab === "summary" && (
+              <SummarySettingsSection
+                enabled={settings.summarizer_enabled}
+                status={summarizerStatus}
+                busy={summaryBusy}
+                deleting={summaryDeleting}
+                progress={summaryProgress}
+                stage={summaryStage}
+                envSetupBusy={envSetupBusy}
+                envSetupStatus={envSetupStatus}
+                onToggle={toggleSummarizer}
+                onSetupEnv={setupSummarizerEnv}
+                onPrepareModel={prepareSummarizerModel}
+                onDeleteModel={deleteSummarizerModel}
+              />
+            )}
 
-          {activeTab === "summary" && (
-            <SummarySettingsSection
-              enabled={settings.summarizer_enabled}
-              status={summarizerStatus}
-              busy={summaryBusy}
-              deleting={summaryDeleting}
-              progress={summaryProgress}
-              stage={summaryStage}
-              envSetupBusy={envSetupBusy}
-              envSetupStatus={envSetupStatus}
-              onToggle={toggleSummarizer}
-              onSetupEnv={setupSummarizerEnv}
-              onPrepareModel={prepareSummarizerModel}
-              onDeleteModel={deleteSummarizerModel}
-            />
-          )}
-
-          {activeTab === "updates" && (
-            <UpdatesSettingsSection updater={updater} onOpenLogs={openLogs} />
-          )}
-        </FieldGroup>
+            {activeTab === "updates" && (
+              <UpdatesSettingsSection updater={updater} onOpenLogs={openLogs} />
+            )}
+          </FieldGroup>
+        </div>
 
         <SettingsFooter appVersion={appVersion} />
       </DialogContent>
