@@ -36,7 +36,6 @@ const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(700);
 
 const LEGACY_QWEN_READY_MARKER: &str = ".parrot-ready-summary";
-pub const EXPECTED_SUMMARY_BYTES: u64 = 2_262_920_192;
 
 const SUMMARY_MAX_TOKENS: u32 = 4096;
 const SUMMARY_TEMP: f32 = 0.3;
@@ -101,6 +100,14 @@ pub fn is_ready(app: &AppHandle) -> bool {
     resolve_python(app).is_ok() && model_cache_exists(app)
 }
 
+pub fn expected_summary_bytes(app: &AppHandle) -> u64 {
+    selected_model(app).expected_bytes
+}
+
+pub fn selected_model_label(app: &AppHandle) -> &'static str {
+    selected_model(app).label
+}
+
 fn selected_model(app: &AppHandle) -> &'static SummaryModelSpec {
     let settings = settings::load(app);
     summarizer_models::summary_model_spec(&settings.summary_model)
@@ -147,6 +154,7 @@ pub fn warmup_model(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<()> {
     }
     let started = Instant::now();
     let spec = selected_model(app);
+    let model_label = selected_model_label(app);
     run_summary_generate(
         app,
         spec,
@@ -159,8 +167,7 @@ pub fn warmup_model(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<()> {
         "Не удалось подготовить модель конспекта",
     )?;
     tracing::info!(
-        "summary model warmup finished for {} in {:.2}s",
-        spec.id,
+        "summary model warmup finished for {model_label} in {:.2}s",
         started.elapsed().as_secs_f64()
     );
     let cache_dir = paths::qwen_cache_dir(app)?;

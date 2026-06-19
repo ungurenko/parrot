@@ -101,7 +101,11 @@ fn set_settings(
     if old.engine != new.engine {
         preload_active_engine(app.clone());
     }
-    if new.summarizer_enabled && !old.summarizer_enabled {
+    if old.summary_model != new.summary_model {
+        summarizer_qwen3::stop_server();
+    }
+    if new.summarizer_enabled && (!old.summarizer_enabled || old.summary_model != new.summary_model)
+    {
         summarizer_qwen3::preload_server(app.clone());
     }
     Ok(())

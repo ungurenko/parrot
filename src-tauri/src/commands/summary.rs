@@ -70,7 +70,7 @@ pub(crate) async fn download_summarizer_model(
     let _ = app.emit("summary_model:progress", 1u32);
     let _ = app.emit("summary_model:stage", "downloading");
 
-    let expected_bytes = summarizer_qwen3::EXPECTED_SUMMARY_BYTES;
+    let expected_bytes = summarizer_qwen3::expected_summary_bytes(&app);
     let cache_dir = paths::qwen_cache_dir(&app).map_err(|e| e.to_string())?;
     let poll_app = app.clone();
     let poll_handle = tauri::async_runtime::spawn(async move {
