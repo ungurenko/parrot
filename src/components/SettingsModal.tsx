@@ -23,12 +23,14 @@ import {
   DEFAULT_SUMMARY_MODEL,
   ENGINE_LABEL,
   LANGUAGE_LABEL,
-  SUMMARIZER_MODEL_LABEL,
-  SUMMARIZER_MODEL_SIZE,
+  SUMMARY_MODEL_BADGE,
+  SUMMARY_MODEL_LABEL,
+  SUMMARY_MODEL_SIZE,
   type Engine,
   type EngineStatuses,
   type ModelProgressDetail,
   type Settings,
+  type SummaryModel,
   type SummarizerStatus,
   type TranscriptLanguage,
 } from "../types";
@@ -463,6 +465,7 @@ function UpdatesSettingsSection({
 
 interface SummarySettingsSectionProps {
   enabled: boolean;
+  summaryModel: SummaryModel;
   status: SummarizerStatus | null;
   busy: boolean;
   deleting: boolean;
@@ -471,6 +474,7 @@ interface SummarySettingsSectionProps {
   envSetupBusy: boolean;
   envSetupStatus: string | null;
   onToggle: (enabled: boolean) => void;
+  onSummaryModelChange: (model: SummaryModel) => void;
   onSetupEnv: () => void;
   onPrepareModel: () => void;
   onDeleteModel: () => void;
@@ -478,6 +482,7 @@ interface SummarySettingsSectionProps {
 
 function SummarySettingsSection({
   enabled,
+  summaryModel,
   status,
   busy,
   deleting,
@@ -486,6 +491,7 @@ function SummarySettingsSection({
   envSetupBusy,
   envSetupStatus,
   onToggle,
+  onSummaryModelChange,
   onSetupEnv,
   onPrepareModel,
   onDeleteModel,
@@ -503,105 +509,138 @@ function SummarySettingsSection({
           Показывать блок конспекта в результате транскрипции
           <span className="summary-toggle-hint">
             Кнопка «Сгенерировать» появится под каждым готовым транскриптом.
-            Модель Qwen 3-4B Instruct (4-bit MLX), работает полностью оффлайн.
+            Выбранная модель конспекта работает полностью оффлайн после первой
+            загрузки.
           </span>
         </span>
       </label>
 
       {enabled && (
-        <div
-          className={cn(
-            "engine-card flex min-w-0 flex-col gap-2",
-            status?.modelReady && "selected",
-            status && !status.available && "unavailable",
-          )}
-        >
-          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
-            <div className="flex min-w-0 flex-1 items-start gap-3">
-              <span className="min-w-0">
+        <div className="flex min-w-0 flex-col gap-2">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {(["qwen3-4b", "gemma4-e2b"] as SummaryModel[]).map((model) => (
+              <button
+                key={model}
+                type="button"
+                className={cn(
+                  "engine-card min-w-0 text-left",
+                  summaryModel === model && "selected",
+                )}
+                onClick={() => onSummaryModelChange(model)}
+                disabled={busy || deleting}
+              >
                 <span className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="font-medium leading-snug">
-                    {SUMMARIZER_MODEL_LABEL}
+                    {SUMMARY_MODEL_LABEL[model]}
                   </span>
-                  <Badge variant="outline">{SUMMARIZER_MODEL_SIZE}</Badge>
-                  <Badge variant="secondary">4-bit MLX</Badge>
-                  {status && !status.available && (
-                    <Badge variant="secondary">Недоступна</Badge>
-                  )}
+                  <Badge variant="outline">{SUMMARY_MODEL_SIZE[model]}</Badge>
+                  <Badge variant={model === "gemma4-e2b" ? "secondary" : "outline"}>
+                    {SUMMARY_MODEL_BADGE[model]}
+                  </Badge>
                 </span>
-                <span className="mt-1 block whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
-                  {status?.unavailableReason ??
-                    "Разовая загрузка ~2.3 ГБ. После этого конспекты создаются оффлайн."}
+                <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                  {model === "qwen3-4b"
+                    ? "Проверенная модель для стабильных конспектов."
+                    : "Свежая Gemma для сравнения качества русского текста."}
                 </span>
-              </span>
-            </div>
-            <div className="flex shrink-0 items-center gap-2 self-start sm:self-auto">
-              <span className={cn("status-chip", status?.modelReady && "ready")}>
-                <span className="dot" aria-hidden="true" />
-                {status?.modelReady ? "Скачана" : "Не скачана"}
-              </span>
-              {status && !status.available && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={envSetupBusy}
-                  onClick={onSetupEnv}
-                  title="Установить Python-окружение для конспекта"
-                >
-                  {envSetupBusy ? "Устанавливаю…" : "Установить окружение"}
-                </Button>
-              )}
-              {!status?.modelReady && status?.available && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size={busy ? "sm" : "icon-sm"}
-                  disabled={busy || deleting}
-                  onClick={onPrepareModel}
-                  title="Подготовить модель конспекта"
-                >
-                  {busy ? `${progress}%` : <DownloadIcon data-icon="inline-start" />}
-                </Button>
-              )}
-              {status?.modelReady && (
-                <Button
-                  type="button"
-                  variant="destructive"
-                  size="icon-sm"
-                  disabled={busy || deleting}
-                  onClick={onDeleteModel}
-                  title="Удалить модель конспекта"
-                >
-                  <Trash2Icon data-icon="inline-start" />
-                </Button>
-              )}
-            </div>
+              </button>
+            ))}
           </div>
 
-          {busy && (
-            <div className="flex min-w-0 flex-col gap-2 pl-1">
-              <Progress
-                value={Math.max(progress, 2)}
-                className={stage === "warmup" ? "animate-pulse" : ""}
-              />
-              <div className="text-xs text-muted-foreground">
-                {stage === "warmup"
-                  ? `Прогреваю модель… ${progress}%`
-                  : `Скачиваю модель… ${progress}%`}
+          <div
+            className={cn(
+              "engine-card flex min-w-0 flex-col gap-2",
+              status?.modelReady && "selected",
+              status && !status.available && "unavailable",
+            )}
+          >
+            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
+              <div className="flex min-w-0 flex-1 items-start gap-3">
+                <span className="min-w-0">
+                  <span className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="font-medium leading-snug">
+                      {SUMMARY_MODEL_LABEL[summaryModel]}
+                    </span>
+                    <Badge variant="outline">{SUMMARY_MODEL_SIZE[summaryModel]}</Badge>
+                    <Badge variant="secondary">4-bit MLX</Badge>
+                    {status && !status.available && (
+                      <Badge variant="secondary">Недоступна</Badge>
+                    )}
+                  </span>
+                  <span className="mt-1 block whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
+                    {status?.unavailableReason ??
+                      `Разовая загрузка ${SUMMARY_MODEL_SIZE[summaryModel]}. После этого конспекты создаются оффлайн.`}
+                  </span>
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-2 self-start sm:self-auto">
+                <span className={cn("status-chip", status?.modelReady && "ready")}>
+                  <span className="dot" aria-hidden="true" />
+                  {status?.modelReady ? "Скачана" : "Не скачана"}
+                </span>
+                {status && !status.available && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={envSetupBusy}
+                    onClick={onSetupEnv}
+                    title="Установить Python-окружение для конспекта"
+                  >
+                    {envSetupBusy ? "Устанавливаю…" : "Установить окружение"}
+                  </Button>
+                )}
+                {!status?.modelReady && status?.available && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size={busy ? "sm" : "icon-sm"}
+                    disabled={busy || deleting}
+                    onClick={onPrepareModel}
+                    title="Подготовить модель конспекта"
+                  >
+                    {busy ? `${progress}%` : <DownloadIcon data-icon="inline-start" />}
+                  </Button>
+                )}
+                {status?.modelReady && (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="icon-sm"
+                    disabled={busy || deleting}
+                    onClick={onDeleteModel}
+                    title="Удалить модель конспекта"
+                  >
+                    <Trash2Icon data-icon="inline-start" />
+                  </Button>
+                )}
               </div>
             </div>
-          )}
 
-          {deleting && (
-            <div className="text-xs text-muted-foreground">Удаляю модель…</div>
-          )}
+            {busy && (
+              <div className="flex min-w-0 flex-col gap-2 pl-1">
+                <Progress
+                  value={Math.max(progress, 2)}
+                  className={stage === "warmup" ? "animate-pulse" : ""}
+                />
+                <div className="text-xs text-muted-foreground">
+                  {stage === "warmup"
+                    ? `Прогреваю модель… ${progress}%`
+                    : `Скачиваю модель ${SUMMARY_MODEL_SIZE[summaryModel]}… ${progress}%`}
+                </div>
+              </div>
+            )}
 
-          {(envSetupBusy || envSetupStatus) && (
-            <div className="text-xs text-muted-foreground pl-1">
-              {envSetupStatus ?? "Подготовка окружения…"}
-            </div>
-          )}
+            {deleting && (
+              <div className="text-xs text-muted-foreground">Удаляю модель…</div>
+            )}
+
+            {(envSetupBusy || envSetupStatus) && (
+              <div className="text-xs text-muted-foreground pl-1">
+                {envSetupStatus ?? "Подготовка окружения…"}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </Field>
@@ -892,6 +931,29 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
     }
   };
 
+  const changeSummaryModel = async (summary_model: SummaryModel) => {
+    if (!settings || summary_model === settings.summary_model) return;
+    const next = { ...settings, summary_model };
+    if (previewMode) {
+      setSettings(next);
+      setSummarizerStatus({ available: true, modelReady: false });
+      setSummaryProgress(0);
+      return;
+    }
+    setSummaryBusy(true);
+    setModelError(null);
+    try {
+      await invoke("set_settings", { new: next });
+      setSettings(next);
+      setSummarizerStatus(await invoke<SummarizerStatus>("get_summarizer_status"));
+      setSummaryProgress(0);
+    } catch (e: unknown) {
+      setModelError(String(e));
+    } finally {
+      setSummaryBusy(false);
+    }
+  };
+
   const toggleDictation = async (enabled: boolean) => {
     if (!settings) return;
     const next = { ...settings, dictation_enabled: enabled };
@@ -1080,8 +1142,9 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
 
   const deleteSummarizerModel = async () => {
     if (!summarizerStatus?.modelReady) return;
+    const summaryModel = settings?.summary_model ?? DEFAULT_SUMMARY_MODEL;
     const ok = window.confirm(
-      `Удалить модель «${SUMMARIZER_MODEL_LABEL}»?\n\nКонспекты не сохранятся, но транскрипции останутся на месте. При необходимости модель можно скачать заново.`,
+      `Удалить модель «${SUMMARY_MODEL_LABEL[summaryModel]}»?\n\nКонспекты не сохранятся, но транскрипции останутся на месте. При необходимости модель можно скачать заново.`,
     );
     if (!ok) return;
     if (previewMode) {
@@ -1108,6 +1171,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   };
 
   if (!settings) return null;
+  const summaryModel = settings.summary_model ?? DEFAULT_SUMMARY_MODEL;
 
   return (
     <Dialog
@@ -1176,6 +1240,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
             {activeTab === "summary" && (
               <SummarySettingsSection
                 enabled={settings.summarizer_enabled}
+                summaryModel={summaryModel}
                 status={summarizerStatus}
                 busy={summaryBusy}
                 deleting={summaryDeleting}
@@ -1184,6 +1249,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
                 envSetupBusy={envSetupBusy}
                 envSetupStatus={envSetupStatus}
                 onToggle={toggleSummarizer}
+                onSummaryModelChange={changeSummaryModel}
                 onSetupEnv={setupSummarizerEnv}
                 onPrepareModel={prepareSummarizerModel}
                 onDeleteModel={deleteSummarizerModel}

@@ -130,8 +130,6 @@ export const DEFAULT_SUMMARY_MODEL: SummaryModel = "qwen3-4b";
 
 export const selectedSummaryModelLabel = (model: SummaryModel) => SUMMARY_MODEL_LABEL[model];
 export const selectedSummaryModelSize = (model: SummaryModel) => SUMMARY_MODEL_SIZE[model];
-export const SUMMARIZER_MODEL_LABEL = selectedSummaryModelLabel(DEFAULT_SUMMARY_MODEL);
-export const SUMMARIZER_MODEL_SIZE = selectedSummaryModelSize(DEFAULT_SUMMARY_MODEL);
 
 export interface HistoryEntry {
   id: string;

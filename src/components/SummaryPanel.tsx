@@ -10,14 +10,17 @@ import {
   listenInTauri,
 } from "@/lib/runtime";
 import {
-  SUMMARIZER_MODEL_LABEL,
-  SUMMARIZER_MODEL_SIZE,
+  DEFAULT_SUMMARY_MODEL,
+  SUMMARY_MODEL_LABEL,
+  SUMMARY_MODEL_SIZE,
   type Job,
+  type Settings,
   type SummarizerStatus,
 } from "../types";
 
 interface Props {
   job: Job;
+  settings: Settings;
   /** При первом рендере панель сама запросит модель к скачиванию. */
   autoStartDownload?: boolean;
 }
@@ -137,9 +140,12 @@ const stageLabel = (stage?: string) => {
   }
 };
 
-export function SummaryPanel({ job, autoStartDownload }: Props) {
+export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
   const status = job.summaryStatus ?? "idle";
   const percent = job.summaryPercent ?? 0;
+  const summaryModel = settings.summary_model ?? DEFAULT_SUMMARY_MODEL;
+  const summaryModelLabel = SUMMARY_MODEL_LABEL[summaryModel];
+  const summaryModelSize = SUMMARY_MODEL_SIZE[summaryModel];
   const rendered = useMemo(
     () => (job.summary ? renderMarkdown(job.summary) : null),
     [job.summary],
@@ -335,12 +341,12 @@ export function SummaryPanel({ job, autoStartDownload }: Props) {
       {available && !modelReady && !modelInstalling && (
         <div className="summary-promo">
           <p className="summary-promo-text">
-            Локальная модель {SUMMARIZER_MODEL_LABEL} ({SUMMARIZER_MODEL_SIZE},
+            Локальная модель {summaryModelLabel} ({summaryModelSize},
             работает оффлайн) соберёт из транскрипта краткое резюме, темы,
             тезисы и список действий.
           </p>
           <Button type="button" onClick={installModel}>
-            ⬇︎ Скачать модель ({SUMMARIZER_MODEL_SIZE})
+            ⬇︎ Скачать модель ({summaryModelSize})
           </Button>
           {modelError && (
             <Alert variant="destructive">
@@ -361,7 +367,7 @@ export function SummaryPanel({ job, autoStartDownload }: Props) {
           <div className="summary-progress-text">
             {modelStage === "warmup"
               ? `Прогреваю модель… ${modelProgress}%`
-              : `Скачиваю модель ${SUMMARIZER_MODEL_SIZE}… ${modelProgress}%`}
+              : `Скачиваю модель ${summaryModelSize}… ${modelProgress}%`}
           </div>
         </div>
       )}

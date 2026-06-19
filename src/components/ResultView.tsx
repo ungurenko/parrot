@@ -12,8 +12,10 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
+  DEFAULT_SUMMARY_MODEL,
   ENGINE_LABEL,
-  SUMMARIZER_MODEL_SIZE,
+  SUMMARY_MODEL_LABEL,
+  SUMMARY_MODEL_SIZE,
   type Job,
   type Settings,
 } from "../types";
@@ -198,6 +200,9 @@ export function ResultView({
   const wordCount = countWords((job.text ?? "").trim());
   const charCount = (job.text ?? "").length;
   const engine = engineLabel ?? ENGINE_LABEL.parakeet;
+  const summaryModel = settings.summary_model ?? DEFAULT_SUMMARY_MODEL;
+  const summaryModelLabel = SUMMARY_MODEL_LABEL[summaryModel];
+  const summaryModelSize = SUMMARY_MODEL_SIZE[summaryModel];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -233,8 +238,8 @@ export function ResultView({
               Хотите конспект из этой записи?
             </div>
             <div className="summary-banner-text">
-              Локальная модель Qwen 3-4B ({SUMMARIZER_MODEL_SIZE}, оффлайн)
-              соберёт краткое резюме, темы, тезисы и список действий.
+              Локальная модель {summaryModelLabel} ({summaryModelSize},
+              оффлайн) соберёт краткое резюме, темы, тезисы и список действий.
             </div>
           </div>
           <div className="summary-banner-actions">
@@ -329,6 +334,7 @@ export function ResultView({
         {summarizerEnabled && (
           <SummaryPanel
             job={job}
+            settings={settings}
             autoStartDownload={pendingAutoDownload}
           />
         )}
