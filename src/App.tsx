@@ -20,11 +20,13 @@ import {
   isTauriRuntime,
   listenInTauri,
 } from "./lib/runtime";
+import { modeOptionForEngine } from "./lib/engineModes";
+import { formatErrorDescription, userErrorFrom } from "./lib/userErrors";
 import {
   DEFAULT_SUMMARY_MODEL,
-  ENGINE_LABEL,
   type DictationPhase,
   type DictationStatus,
+  type HistoryEntry,
   type Job,
   type Settings,
 } from "./types";
@@ -177,7 +179,8 @@ function App() {
         await invoke("enqueue_file", { path: p });
       } catch (e) {
         console.error("enqueue_file failed:", e);
-        toast.error("Не удалось добавить файл", { description: String(e) });
+        const friendly = userErrorFrom(e);
+        toast.error(friendly.title, { description: formatErrorDescription(e) });
       }
     }
   }, []);
@@ -187,7 +190,8 @@ function App() {
     try {
       await invoke("enqueue_youtube", { url });
     } catch (e) {
-      toast.error("Не удалось добавить YouTube", { description: String(e) });
+      const friendly = userErrorFrom(e);
+      toast.error(friendly.title, { description: formatErrorDescription(e) });
     }
   }, []);
 
@@ -199,11 +203,15 @@ function App() {
         const rehydrated: Job = {
           id: loaded.entry.id,
           sourceName: loaded.entry.sourceName,
+          sourceKind: loaded.entry.sourceKind,
+          sourceValue: loaded.entry.sourceValue,
           status: "done",
           stage: null,
           percent: 100,
           text: loaded.text,
           outputPath: loaded.entry.outputPath,
+          engine: loaded.entry.engine as Job["engine"],
+          language: loaded.entry.language as Job["language"],
           summary: loaded.summary,
           summaryPath: loaded.entry.summaryPath,
           summaryStatus: loaded.summary ? "done" : undefined,
@@ -212,11 +220,43 @@ function App() {
         dispatchJobs({ type: "historyLoaded", job: rehydrated });
         setSelectedId(rehydrated.id);
       } catch (e) {
-        toast.error("Не удалось открыть запись", { description: String(e) });
+        const friendly = userErrorFrom(e);
+        toast.error(friendly.title, { description: formatErrorDescription(e) });
       }
     },
     [loadEntry],
   );
+
+  const handleRepeatHistory = useCallback(async (entry: HistoryEntry) => {
+    if (!entry.sourceKind || !entry.sourceValue) {
+      toast.info("Повтор недоступен", {
+        description: "Эта запись создана в старой версии истории. Добавьте файл заново.",
+      });
+      return;
+    }
+
+    try {
+      if (entry.sourceKind === "localFile") {
+        await invoke("enqueue_file", {
+          path: entry.sourceValue,
+          engine: entry.engine,
+          language: entry.language,
+        });
+      } else {
+        await invoke("enqueue_youtube", {
+          url: entry.sourceValue,
+          engine: entry.engine,
+          language: entry.language,
+        });
+      }
+      toast.success("Запустил повтор", {
+        description: "Запись добавлена в очередь.",
+      });
+    } catch (e) {
+      const friendly = userErrorFrom(e);
+      toast.error(friendly.title, { description: formatErrorDescription(e) });
+    }
+  }, []);
 
   const view = useMemo(() => pickView(jobs, selectedId), [jobs, selectedId]);
 
@@ -243,7 +283,7 @@ function App() {
     );
   }
 
-  const engineLabel = settings ? ENGINE_LABEL[settings.engine] : undefined;
+  const engineLabel = settings ? modeOptionForEngine(settings.engine).title : undefined;
   const showQueue = jobs.length > 1;
   const dictationStatus =
     dictationPhase === "recording"
@@ -371,6 +411,7 @@ function App() {
               onOpenHistory={handleOpenHistory}
               onDeleteHistory={deleteEntry}
               onClearHistory={clearAll}
+              onRepeatHistory={handleRepeatHistory}
               onOpenSettings={() => setSettingsOpen(true)}
             />
           )}
@@ -384,6 +425,7 @@ function App() {
               engineLabel={engineLabel}
               settings={settings}
               onSettingsChange={setSettings}
+              onOpenSettings={() => setSettingsOpen(true)}
             />
           )}
         </section>

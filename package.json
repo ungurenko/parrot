@@ -1,12 +1,13 @@
 {
   "name": "parrot",
   "private": true,
-  "version": "0.4.15",
+  "version": "0.4.16",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "check": "npm run build && npm run check:rust",
+    "test:ui": "vitest run",
+    "check": "npm run test:ui && npm run build && npm run check:rust",
     "check:rust": "cd src-tauri && cargo test --locked && cargo fmt --check && cargo clippy --all-targets --all-features --locked -- -D warnings",
     "build:local": "tauri build && bash tools/sign_macos_bundle.sh",
     "preview": "vite preview",
@@ -41,6 +42,7 @@
     "shadcn": "^4.2.0",
     "tailwindcss": "^4.2.2",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.9"
   }
 }

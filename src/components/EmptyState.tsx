@@ -18,6 +18,7 @@ interface Props {
   onOpenHistory?: (id: string) => void;
   onDeleteHistory?: (id: string) => void;
   onClearHistory?: () => void;
+  onRepeatHistory?: (entry: HistoryEntry) => void;
   onOpenSettings?: () => void;
 }
 
@@ -29,11 +30,12 @@ export function EmptyState({
   onOpenHistory,
   onDeleteHistory,
   onClearHistory,
+  onRepeatHistory,
   onOpenSettings,
 }: Props) {
   const showHistory =
     historyEntries.length > 0 &&
-    Boolean(onOpenHistory && onDeleteHistory && onClearHistory);
+    Boolean(onOpenHistory && onDeleteHistory && onClearHistory && onRepeatHistory);
 
   return (
     <div
@@ -89,6 +91,7 @@ export function EmptyState({
             onOpen={onOpenHistory!}
             onDelete={onDeleteHistory!}
             onClear={onClearHistory!}
+            onRepeat={onRepeatHistory!}
           />
           <button
             type="button"

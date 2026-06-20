@@ -8,9 +8,13 @@ export type SummaryStage = "loading" | "generating" | "finalizing";
 export interface Job {
   id: string;
   sourceName: string;
+  sourceKind?: "localFile" | "youtube";
+  sourceValue?: string;
   status: JobStatus;
   stage: JobStage;
   percent: number;
+  engine?: Engine;
+  language?: TranscriptLanguage;
   text?: string;
   outputPath?: string;
   error?: string;
@@ -23,6 +27,7 @@ export interface Job {
 }
 
 export type Engine = "parakeet" | "whisper" | "qwen-0.6b" | "qwen-1.7b";
+export type EngineMode = "fast" | "russian" | "hardAudio" | "manyLanguages";
 
 export const ENGINE_LABEL: Record<Engine, string> = {
   parakeet: "Parakeet V3",
@@ -134,6 +139,8 @@ export const selectedSummaryModelSize = (model: SummaryModel) => SUMMARY_MODEL_S
 export interface HistoryEntry {
   id: string;
   sourceName: string;
+  sourceKind?: "localFile" | "youtube";
+  sourceValue?: string;
   engine: string;
   language: string;
   createdAt: string;

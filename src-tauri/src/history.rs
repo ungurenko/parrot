@@ -12,6 +12,10 @@ const MAX_ENTRIES: usize = 100;
 pub struct HistoryEntry {
     pub id: String,
     pub source_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_value: Option<String>,
     pub engine: String,
     pub language: String,
     /// ISO 8601 UTC timestamp, e.g. "2026-04-22T14:30:00Z".
@@ -127,6 +131,45 @@ fn format_unix_secs(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_entry_should_load_legacy_entries_without_repeat_source() {
+        let json = r#"[
+          {
+            "id": "old",
+            "sourceName": "meeting.m4a",
+            "engine": "parakeet",
+            "language": "auto",
+            "createdAt": "2026-06-20T09:00:00Z",
+            "outputPath": "/tmp/meeting.txt"
+          }
+        ]"#;
+
+        let entries: Vec<HistoryEntry> = serde_json::from_str(json).expect("legacy history");
+
+        assert_eq!(entries[0].source_kind, None);
+        assert_eq!(entries[0].source_value, None);
+    }
+
+    #[test]
+    fn history_entry_should_store_repeat_source_for_new_entries() {
+        let entry = HistoryEntry {
+            id: "new".to_string(),
+            source_name: "video title".to_string(),
+            source_kind: Some("youtube".to_string()),
+            source_value: Some("https://youtu.be/abc".to_string()),
+            engine: "qwen-0.6b".to_string(),
+            language: "ru".to_string(),
+            created_at: "2026-06-20T09:00:00Z".to_string(),
+            output_path: "/tmp/video.txt".to_string(),
+            summary_path: None,
+        };
+
+        let json = serde_json::to_string(&entry).expect("history json");
+
+        assert!(json.contains("\"sourceKind\":\"youtube\""));
+        assert!(json.contains("\"sourceValue\":\"https://youtu.be/abc\""));
+    }
 
     #[test]
     fn format_unix_secs_matches_known_timestamps() {

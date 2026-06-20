@@ -1,7 +1,12 @@
 import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { CopyIcon, FolderOpenIcon } from "lucide-react";
+import {
+  CopyIcon,
+  FolderOpenIcon,
+  RefreshCwIcon,
+  SparklesIcon,
+} from "lucide-react";
 import {
   Empty,
   EmptyDescription,
@@ -12,14 +17,15 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
-  DEFAULT_SUMMARY_MODEL,
   ENGINE_LABEL,
-  SUMMARY_MODEL_LABEL,
-  SUMMARY_MODEL_SIZE,
+  type EngineStatuses,
   type Job,
   type Settings,
+  type TranscriptLanguage,
 } from "../types";
 import { SummaryPanel } from "./SummaryPanel";
+import { formatErrorDescription, userErrorFrom } from "@/lib/userErrors";
+import { readableEngineName } from "@/lib/engineModes";
 
 interface Props {
   job: Job;
@@ -27,6 +33,7 @@ interface Props {
   engineLabel?: string;
   settings: Settings;
   onSettingsChange: (next: Settings) => void;
+  onOpenSettings: () => void;
 }
 
 const PLAIN_TRANSCRIPT_CHAR_LIMIT = 50_000;
@@ -48,13 +55,12 @@ export function ResultView({
   engineLabel,
   settings,
   onSettingsChange,
+  onOpenSettings,
 }: Props) {
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [pendingAutoDownload, setPendingAutoDownload] = useState(false);
   const [promoBusy, setPromoBusy] = useState(false);
   const summarizerEnabled = settings.summarizer_enabled;
-  const showPromoBanner =
-    !settings.summarizer_enabled && !settings.summarizer_promo_seen;
 
   const transcriptView = useMemo<TranscriptView>(() => {
     if (!job.text) return { kind: "segments", segments: [] };
@@ -102,11 +108,8 @@ export function ResultView({
     setPromoBusy(false);
   };
 
-  const dismissPromo = () => {
-    void updateSettings({ summarizer_promo_seen: true });
-  };
-
   if (job.status === "error") {
+    const friendly = userErrorFrom(job.error);
     return (
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
@@ -126,9 +129,9 @@ export function ResultView({
           </button>
         </div>
         <Alert variant="destructive" className="glass-modal">
-          <AlertTitle>Ошибка</AlertTitle>
+          <AlertTitle>{friendly.title}</AlertTitle>
           <AlertDescription className="whitespace-pre-wrap">
-            {job.error}
+            {formatErrorDescription(job.error)}
           </AlertDescription>
         </Alert>
       </div>
@@ -184,8 +187,9 @@ export function ResultView({
       await navigator.clipboard.writeText(job.text ?? "");
       toast.success("Скопировано");
     } catch (e) {
-      toast.error("Не удалось скопировать текст", {
-        description: String(e),
+      const friendly = userErrorFrom(e);
+      toast.error(friendly.title, {
+        description: formatErrorDescription(e),
       });
     }
   };
@@ -193,17 +197,57 @@ export function ResultView({
   const revealInFinder = () => {
     if (!job.outputPath) return;
     invoke("open_in_finder", { path: job.outputPath }).catch((e) => {
-      toast.error("Не удалось открыть в Finder", { description: String(e) });
+      const friendly = userErrorFrom(e);
+      toast.error(friendly.title, { description: formatErrorDescription(e) });
     });
+  };
+
+  const improveQuality = async () => {
+    if (!job.sourceKind || !job.sourceValue) {
+      toast.info("Повтор недоступен", {
+        description: "Эта запись создана в старой версии истории. Добавьте файл заново.",
+      });
+      return;
+    }
+
+    try {
+      const statuses = await invoke<EngineStatuses>("get_engine_statuses");
+      const qwenStatus = statuses["qwen-0.6b"];
+      if (!qwenStatus?.available || !qwenStatus.modelReady) {
+        toast.info("Нужно подготовить режим качества", {
+          description:
+            "Откройте настройки, скачайте режим «Лучше для русского» и запустите улучшение ещё раз.",
+        });
+        onOpenSettings();
+        return;
+      }
+
+      const language = (job.language ?? settings.language) as TranscriptLanguage;
+      if (job.sourceKind === "localFile") {
+        await invoke("enqueue_file", {
+          path: job.sourceValue,
+          engine: "qwen-0.6b",
+          language,
+        });
+      } else {
+        await invoke("enqueue_youtube", {
+          url: job.sourceValue,
+          engine: "qwen-0.6b",
+          language,
+        });
+      }
+      toast.success("Запустил улучшение качества", {
+        description: "Parrot повторит эту запись в режиме «Лучше для русского».",
+      });
+    } catch (e) {
+      const friendly = userErrorFrom(e);
+      toast.error(friendly.title, { description: formatErrorDescription(e) });
+    }
   };
 
   const wordCount = countWords((job.text ?? "").trim());
   const charCount = (job.text ?? "").length;
-  const engine = engineLabel ?? ENGINE_LABEL.parakeet;
-  const summaryModel = settings.summary_model ?? DEFAULT_SUMMARY_MODEL;
-  const summaryModelLabel = SUMMARY_MODEL_LABEL[summaryModel];
-  const summaryModelSize = SUMMARY_MODEL_SIZE[summaryModel];
-
+  const engine = job.engine ? readableEngineName(job.engine) : (engineLabel ?? ENGINE_LABEL.parakeet);
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -228,41 +272,53 @@ export function ResultView({
         </span>
       </div>
 
-      {showPromoBanner && (
-        <div className="summary-banner" role="region" aria-label="Конспект">
-          <div className="summary-banner-icon" aria-hidden="true">
-            🪶
-          </div>
-          <div className="summary-banner-body">
-            <div className="summary-banner-title">
-              Хотите конспект из этой записи?
-            </div>
-            <div className="summary-banner-text">
-              Локальная модель {summaryModelLabel} ({summaryModelSize},
-              оффлайн) соберёт краткое резюме, темы, тезисы и список действий.
-            </div>
-          </div>
-          <div className="summary-banner-actions">
-            <Button
-              type="button"
-              size="sm"
-              onClick={enableSummarizerAndDownload}
-              disabled={promoBusy}
-            >
-              ⬇︎ Скачать модель
-            </Button>
-            <button
-              type="button"
-              className="summary-banner-close"
-              onClick={dismissPromo}
-              aria-label="Скрыть подсказку"
-              title="Скрыть"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      )}
+      <div className="result-action-bar">
+        <Button type="button" onClick={copyText}>
+          <CopyIcon data-icon="inline-start" />
+          Скопировать
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={revealInFinder}
+          disabled={!job.outputPath}
+        >
+          <FolderOpenIcon data-icon="inline-start" />
+          Показать файл
+        </Button>
+        <Button
+          type="button"
+          variant={summarizerEnabled ? "outline" : "default"}
+          onClick={() => {
+            if (!summarizerEnabled) {
+              void enableSummarizerAndDownload();
+            } else {
+              document.querySelector(".summary-card")?.scrollIntoView({
+                behavior: "smooth",
+                block: "nearest",
+              });
+            }
+          }}
+          disabled={promoBusy}
+        >
+          <SparklesIcon data-icon="inline-start" />
+          Сделать конспект
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={improveQuality}
+          disabled={!job.sourceKind || !job.sourceValue}
+          title={
+            job.sourceKind && job.sourceValue
+              ? "Повторить эту запись в режиме «Лучше для русского»"
+              : "Повтор недоступен для старой записи истории"
+          }
+        >
+          <RefreshCwIcon data-icon="inline-start" />
+          Улучшить качество
+        </Button>
+      </div>
 
       <div className="result-scroll min-h-0 flex-1">
         <div className="doc-card">
@@ -280,21 +336,6 @@ export function ResultView({
                   <b>{engine}</b>
                 </span>
               </div>
-            </div>
-            <div className="export-group">
-              <button type="button" className="export-btn" onClick={copyText}>
-                <CopyIcon size={14} aria-hidden="true" />
-                Скопировать текст
-              </button>
-              <button
-                type="button"
-                className="export-btn"
-                onClick={revealInFinder}
-                disabled={!job.outputPath}
-              >
-                <FolderOpenIcon size={14} aria-hidden="true" />
-                Показать файл
-              </button>
             </div>
           </div>
 
@@ -331,13 +372,11 @@ export function ResultView({
           )}
         </div>
 
-        {summarizerEnabled && (
-          <SummaryPanel
-            job={job}
-            settings={settings}
-            autoStartDownload={pendingAutoDownload}
-          />
-        )}
+        <SummaryPanel
+          job={job}
+          settings={settings}
+          autoStartDownload={pendingAutoDownload}
+        />
       </div>
     </div>
   );

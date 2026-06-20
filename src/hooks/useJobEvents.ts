@@ -4,7 +4,15 @@ import type { Job, JobStage, SummaryStage } from "../types";
 
 interface JobQueued { id: string; sourceName: string; }
 interface JobProgress { id: string; stage: JobStage; percent: number; }
-interface JobDone { id: string; text: string; outputPath: string; }
+interface JobDone {
+  id: string;
+  text: string;
+  outputPath: string;
+  sourceKind: "localFile" | "youtube";
+  sourceValue: string;
+  engine: Job["engine"];
+  language: Job["language"];
+}
 interface JobError { id: string; message: string; }
 interface JobCanceled { id: string; }
 interface JobTitle { id: string; sourceName: string; }
@@ -62,6 +70,10 @@ export function jobsReducer(jobs: Job[], action: JobAction): Job[] {
         stage: null,
         text: action.payload.text,
         outputPath: action.payload.outputPath,
+        sourceKind: action.payload.sourceKind,
+        sourceValue: action.payload.sourceValue,
+        engine: action.payload.engine,
+        language: action.payload.language,
       }));
     case "jobError":
       return updateJob(jobs, action.payload.id, (job) => ({

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import parrotImg from "/parrot.png";
+import { processingProgressMessage } from "@/lib/progressEstimate";
 import type { Job } from "../types";
 
 interface Props {
@@ -118,7 +119,13 @@ function StageItem({
 }
 
 export function ProcessingView({ job, onCancel }: Props) {
-  const status = statusText(job);
+  const startedAtRef = useRef(Date.now());
+  const calmProgress = processingProgressMessage({
+    stage: job.stage,
+    percent: job.percent,
+    elapsedMs: Date.now() - startedAtRef.current,
+  });
+  const status = job.status === "running" ? calmProgress.title : statusText(job);
   const percent = job.status === "running" ? Math.max(job.percent, 3) : 0;
 
   const bars = useMemo(() => {
@@ -157,6 +164,9 @@ export function ProcessingView({ job, onCancel }: Props) {
             {job.sourceName}
           </h3>
           <p className="proc-status">{status}</p>
+          {job.status === "running" && (
+            <p className="proc-detail">{calmProgress.detail}</p>
+          )}
           <div className="progress-track">
             <div
               className={

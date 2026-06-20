@@ -9,9 +9,9 @@ import {
   isTauriRuntime,
   listenInTauri,
 } from "@/lib/runtime";
+import { formatErrorDescription, userErrorFrom } from "@/lib/userErrors";
 import {
   DEFAULT_SUMMARY_MODEL,
-  SUMMARY_MODEL_LABEL,
   SUMMARY_MODEL_SIZE,
   type Job,
   type Settings,
@@ -144,7 +144,6 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
   const status = job.summaryStatus ?? "idle";
   const percent = job.summaryPercent ?? 0;
   const summaryModel = settings.summary_model ?? DEFAULT_SUMMARY_MODEL;
-  const summaryModelLabel = SUMMARY_MODEL_LABEL[summaryModel];
   const summaryModelSize = SUMMARY_MODEL_SIZE[summaryModel];
   const rendered = useMemo(
     () => (job.summary ? renderMarkdown(job.summary) : null),
@@ -214,7 +213,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       setModelProgress(100);
       await refreshSummarizerStatus();
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
     } finally {
       setModelInstalling(false);
     }
@@ -243,7 +242,8 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
         transcriptPath: job.outputPath,
       });
     } catch (e) {
-      toast.error("Не удалось создать конспект", { description: String(e) });
+      const friendly = userErrorFrom(e);
+      toast.error(friendly.title, { description: formatErrorDescription(e) });
     }
   };
 
@@ -262,14 +262,16 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       await navigator.clipboard.writeText(job.summary);
       toast.success("Конспект скопирован");
     } catch (e) {
-      toast.error("Не удалось скопировать", { description: String(e) });
+      const friendly = userErrorFrom(e);
+      toast.error(friendly.title, { description: formatErrorDescription(e) });
     }
   };
 
   const openInFinder = () => {
     if (!job.summaryPath) return;
     invoke("open_in_finder", { path: job.summaryPath }).catch((e) => {
-      toast.error("Не удалось открыть в Finder", { description: String(e) });
+      const friendly = userErrorFrom(e);
+      toast.error(friendly.title, { description: formatErrorDescription(e) });
     });
   };
 
@@ -341,9 +343,8 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       {available && !modelReady && !modelInstalling && (
         <div className="summary-promo">
           <p className="summary-promo-text">
-            Локальная модель {summaryModelLabel} ({summaryModelSize},
-            работает оффлайн) соберёт из транскрипта краткое резюме, темы,
-            тезисы и список действий.
+            Соберите краткий конспект встречи: резюме, темы, тезисы и список
+            действий. Нужно один раз скачать локальную модель ({summaryModelSize}).
           </p>
           <Button type="button" onClick={installModel}>
             ⬇︎ Скачать модель ({summaryModelSize})
@@ -375,8 +376,8 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       {available && modelReady && status === "idle" && (
         <div className="summary-empty">
           <p className="summary-empty-text">
-            Локальная модель соберёт из транскрипта краткое резюме, темы, тезисы
-            и список действий.
+            Соберите краткий конспект встречи: резюме, темы, тезисы и список
+            действий.
           </p>
           <Button
             type="button"
@@ -400,11 +401,11 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       {available && modelReady && status === "error" && (
         <div className="flex flex-col gap-3">
           <Alert variant="destructive">
-            <AlertTitle>Не удалось создать конспект</AlertTitle>
-            <AlertDescription className="whitespace-pre-wrap break-words">
-              {job.summaryError}
-            </AlertDescription>
-          </Alert>
+          <AlertTitle>Не удалось создать конспект</AlertTitle>
+          <AlertDescription className="whitespace-pre-wrap break-words">
+              {formatErrorDescription(job.summaryError)}
+          </AlertDescription>
+        </Alert>
           <Button type="button" variant="outline" onClick={startSummary}>
             Попробовать ещё раз
           </Button>

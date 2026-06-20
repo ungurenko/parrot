@@ -182,7 +182,7 @@ function ModelSettingsSection({
   return (
     <>
       <Field className="min-w-0">
-        <FieldLabel>Модели распознавания</FieldLabel>
+      <FieldLabel>Режим распознавания</FieldLabel>
         <EnginePicker
           value={settings.engine}
           statuses={modelStatuses}

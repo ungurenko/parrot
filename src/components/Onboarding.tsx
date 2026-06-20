@@ -7,27 +7,23 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import {
   Field,
-  FieldDescription,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import {
-  isSlowModelDownload,
-  modelDownloadDetails,
-} from "@/lib/modelProgress";
+import { modelDownloadDetails } from "@/lib/modelProgress";
 import { cleanupTauriListeners, listenInTauri } from "@/lib/runtime";
+import { modeOptionForEngine } from "@/lib/engineModes";
+import { modelProgressMessage } from "@/lib/progressEstimate";
+import { userErrorFrom } from "@/lib/userErrors";
 import {
-  ENGINE_LABEL,
-  ENGINE_SIZE,
   type Engine,
   type EngineStatuses,
   type ModelProgressDetail,
@@ -39,11 +35,11 @@ interface Props {
   onDone: () => void;
 }
 
-type Step = "folder" | "engine" | "model" | "downloading" | "ready";
+type Step = "setup" | "downloading" | "ready";
 type ModelStage = "downloading" | "warmup" | "ready";
 
 export function Onboarding({ onDone }: Props) {
-  const [step, setStep] = useState<Step>("folder");
+  const [step, setStep] = useState<Step>("setup");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [engineStatuses, setEngineStatuses] = useState<EngineStatuses>({});
   const [progress, setProgress] = useState(0);
@@ -51,7 +47,14 @@ export function Onboarding({ onDone }: Props) {
     useState<ModelProgressDetail | null>(null);
   const [modelStage, setModelStage] = useState<ModelStage>("downloading");
   const [error, setError] = useState<string | null>(null);
+  const [showEngineChoice, setShowEngineChoice] = useState(false);
   const selectedEngineStatus = settings ? engineStatuses[settings.engine] : undefined;
+  const selectedMode = settings ? modeOptionForEngine(settings.engine) : null;
+  const progressMessage = modelProgressMessage({
+    stage: modelStage,
+    percent: progress,
+    detail: progressDetail,
+  });
 
   useEffect(() => {
     invoke<Settings>("get_settings").then(setSettings);
@@ -98,6 +101,19 @@ export function Onboarding({ onDone }: Props) {
     }
   };
 
+  const chooseFastMode = async () => {
+    await changeEngine("parakeet");
+    setShowEngineChoice(false);
+  };
+
+  const prepareOrFinish = async () => {
+    if (selectedEngineStatus?.modelReady) {
+      await finish();
+      return;
+    }
+    await downloadModel();
+  };
+
   const downloadModel = async () => {
     setStep("downloading");
     setModelStage("downloading");
@@ -109,8 +125,9 @@ export function Onboarding({ onDone }: Props) {
       invoke<EngineStatuses>("get_engine_statuses").then(setEngineStatuses);
       setStep("ready");
     } catch (e: unknown) {
-      setError(String(e));
-      setStep("model");
+      const friendly = userErrorFrom(e);
+      setError(`${friendly.message}\n${friendly.action}`);
+      setStep("setup");
     }
   };
 
@@ -135,13 +152,13 @@ export function Onboarding({ onDone }: Props) {
             />
             Parrot
           </CardTitle>
-          <CardDescription>
-            Настроим приложение перед первым запуском.
-          </CardDescription>
+          <p className="text-sm text-muted-foreground">
+            Подготовим Parrot к первой расшифровке. Без лишних настроек.
+          </p>
         </CardHeader>
 
         <CardContent className="px-6 pb-6">
-          {error && step !== "model" && (
+          {error && (
             <Alert variant="destructive" className="mb-4">
               <AlertDescription className="whitespace-pre-wrap">
                 {error}
@@ -149,11 +166,11 @@ export function Onboarding({ onDone }: Props) {
             </Alert>
           )}
 
-          {step === "folder" && settings && (
-            <FieldGroup>
+          {step === "setup" && settings && selectedMode && (
+            <FieldGroup className="gap-5">
               <Field>
                 <FieldLabel htmlFor="onboarding-save-dir">
-                  1. Выберите папку для транскрипций
+                  Папка для готовых текстов
                 </FieldLabel>
                 <div className="flex items-center gap-2">
                   <Input
@@ -172,69 +189,70 @@ export function Onboarding({ onDone }: Props) {
                   </Button>
                 </div>
               </Field>
-            </FieldGroup>
-          )}
 
-          {step === "engine" && settings && (
-            <FieldGroup>
-              <Field>
-                <FieldLabel>2. Выберите движок транскрибации</FieldLabel>
-                <FieldDescription>
-                  Можно будет поменять в настройках.
-                </FieldDescription>
-                <EnginePicker
-                  value={settings.engine}
-                  statuses={engineStatuses}
-                  onChange={changeEngine}
-                />
-              </Field>
-            </FieldGroup>
-          )}
+              <div className="quick-start-card">
+                <div className="quick-start-copy">
+                  <div className="quick-start-eyebrow">
+                    Режим распознавания
+                  </div>
+                  <div className="quick-start-title">{selectedMode.title}</div>
+                  <div className="quick-start-text">{selectedMode.detail}</div>
+                  <div className="quick-start-tech">
+                    Модель: {selectedMode.technicalName} · {selectedMode.size}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowEngineChoice((value) => !value)}
+                >
+                  {showEngineChoice ? "Скрыть режимы" : "Выбрать другой режим"}
+                </Button>
+              </div>
 
-          {step === "model" && settings && (
-            <FieldGroup>
-              <Field>
-                <FieldLabel>
-                  3. Подготовим модель {ENGINE_LABEL[settings.engine]}
-                </FieldLabel>
-                <FieldDescription>
-                  Размер: {ENGINE_SIZE[settings.engine]}. Разовая операция — дальше всё работает оффлайн и быстро.
-                </FieldDescription>
-              </Field>
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription className="whitespace-pre-wrap">
-                    {error}
+              {selectedEngineStatus?.available === false && (
+                <Alert>
+                  <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <span>
+                      Этот режим сейчас недоступен. Быстрый режим можно подготовить сразу.
+                    </span>
+                    <Button type="button" variant="outline" onClick={chooseFastMode}>
+                      Выбрать быстрый режим
+                    </Button>
                   </AlertDescription>
                 </Alert>
+              )}
+
+              {showEngineChoice && (
+                <Field>
+                  <FieldLabel>Выберите режим под вашу запись</FieldLabel>
+                  <EnginePicker
+                    value={settings.engine}
+                    statuses={engineStatuses}
+                    onChange={changeEngine}
+                  />
+                </Field>
+              )}
+
+              {!selectedEngineStatus?.modelReady && (
+                <div className="text-xs leading-relaxed text-muted-foreground">
+                  Модель нужно скачать один раз. После этого распознавание работает локально на Mac.
+                </div>
               )}
             </FieldGroup>
           )}
 
           {step === "downloading" && (
             <div className="flex flex-col gap-4">
-              <div className="text-sm font-medium">
-                {modelStage === "warmup"
-                  ? `🔥 Прогреваю модель в памяти… ${progress}%`
-                  : `⬇️ Скачиваю модель… ${progress}%`}
-              </div>
+              <div className="text-sm font-medium">{progressMessage.title}</div>
               <Progress
                 value={Math.max(progress, 2)}
                 className={modelStage === "warmup" ? "h-2 animate-pulse" : "h-2"}
               />
-              <div className="text-xs text-muted-foreground">
-                {modelStage === "warmup"
-                  ? "Загружаю модель в память. Это разово, обычно занимает 10–30 секунд."
-                  : "Загружаю файлы модели."}
-              </div>
+              <div className="text-xs text-muted-foreground">{progressMessage.detail}</div>
               {modelStage === "downloading" && modelDownloadDetails(progressDetail) && (
                 <div className="text-xs text-muted-foreground">
                   {modelDownloadDetails(progressDetail)}
-                </div>
-              )}
-              {modelStage === "downloading" && isSlowModelDownload(progressDetail) && (
-                <div className="text-xs text-muted-foreground">
-                  Сервер отдает файл медленно, загрузка продолжается.
                 </div>
               )}
             </div>
@@ -250,25 +268,16 @@ export function Onboarding({ onDone }: Props) {
           )}
         </CardContent>
 
-        <CardFooter className="justify-end gap-2 bg-white/55 rounded-b-[inherit] px-6 py-4">
-          {step === "folder" && settings && (
-            <Button onClick={() => setStep("engine")}>Далее</Button>
-          )}
-          {step === "engine" && settings && (
-            <Button onClick={() => setStep("model")}>Далее</Button>
-          )}
-          {step === "model" && settings && (
-            <>
-              <Button variant="outline" onClick={() => setStep("engine")}>
-                Назад
-              </Button>
-              <Button
-                onClick={downloadModel}
-                disabled={selectedEngineStatus?.available === false}
-              >
-                Подготовить модель
-              </Button>
-            </>
+        <CardFooter className="justify-end gap-2 rounded-b-[inherit] bg-white/55 px-6 py-4">
+          {step === "setup" && settings && (
+            <Button
+              onClick={prepareOrFinish}
+              disabled={selectedEngineStatus?.available === false}
+            >
+              {selectedEngineStatus?.modelReady
+                ? "Начать работу"
+                : "Подготовить Parrot и начать"}
+            </Button>
           )}
           {step === "ready" && (
             <Button onClick={finish}>Начать работу</Button>

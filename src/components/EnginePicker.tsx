@@ -6,10 +6,10 @@ import {
   isSlowModelDownload,
   modelDownloadDetails,
 } from "@/lib/modelProgress";
+import { ENGINE_MODES } from "@/lib/engineModes";
+import { modelProgressMessage } from "@/lib/progressEstimate";
 import { DownloadIcon, Trash2Icon } from "lucide-react";
 import {
-  ENGINE_SIZE,
-  isQwenEngine,
   type Engine,
   type EngineStatuses,
   type ModelProgressDetail,
@@ -34,43 +34,11 @@ const ACTIVE_JOB_SWITCH_HINT =
 const ACTIVE_JOB_DELETE_HINT =
   "Дождитесь окончания транскрибации, чтобы удалить модель";
 
-const OPTIONS: Array<{
-  id: Engine;
-  title: string;
-  hint: string;
-  badge?: string;
-}> = [
-  {
-    id: "parakeet",
-    title: "Parakeet V3",
-    hint: "Самый быстрый вариант для диктовки. Поддерживает русский и еще 24 языка.",
-    badge: "быстрее всего",
-  },
-  {
-    id: "qwen-0.6b",
-    title: "Qwen3-ASR 0.6B MLX",
-    hint: "Хорошее качество, но запуск тяжелее. Теперь работает через теплый локальный сервер.",
-  },
-  {
-    id: "qwen-1.7b",
-    title: "Qwen3-ASR 1.7B MLX",
-    hint: "Максимальное качество на шумном/акцентном аудио. Нужен Mac с 32+ ГБ RAM для длинных файлов.",
-    badge: "качество",
-  },
-  {
-    id: "whisper",
-    title: "Whisper Large-v3 turbo",
-    hint: "Медленнее, но 100+ языков (включая азиатские и арабский).",
-  },
-];
-
 const progressText = (
   progress: number,
   stage: "downloading" | "warmup" | "ready",
 ) => {
-  if (progress >= 100 || stage === "ready") return "Готово";
-  if (stage === "warmup") return `Прогреваю модель… ${progress}%`;
-  return `Скачиваю модель… ${progress}%`;
+  return modelProgressMessage({ stage, percent: progress }).title;
 };
 
 export function EnginePicker({
@@ -91,22 +59,25 @@ export function EnginePicker({
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-2 overflow-x-hidden">
-      {OPTIONS.map((opt) => {
-        const active = value === opt.id;
-        const status = statuses[opt.id];
+      {ENGINE_MODES.map((opt) => {
+        const active = value === opt.engine;
+        const status = statuses[opt.engine];
         const available = status?.available ?? true;
         const ready = Boolean(status?.modelReady);
-        const preparing = busyEngine === opt.id;
-        const deleting = deletingEngine === opt.id;
-        const prepareLabel = isQwenEngine(opt.id)
-          ? `Подготовить модель ${opt.title}`
-          : `Скачать модель ${opt.title}`;
+        const preparing = busyEngine === opt.engine;
+        const deleting = deletingEngine === opt.engine;
+        const prepareLabel = `Подготовить режим «${opt.title}»`;
         const detailText = preparing ? modelDownloadDetails(progressDetail) : null;
         const slowDownload = preparing && isSlowModelDownload(progressDetail);
+        const calmProgress = modelProgressMessage({
+          stage,
+          percent: progress,
+          detail: progressDetail,
+        });
 
         return (
           <div
-            key={opt.id}
+            key={opt.engine}
             className={cn(
               "engine-card flex min-w-0 flex-col gap-2",
               active && "selected",
@@ -116,7 +87,7 @@ export function EnginePicker({
             <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
               <button
                 type="button"
-                  onClick={() => onChange(opt.id)}
+                  onClick={() => onChange(opt.engine)}
                   disabled={!available || (hasActiveJob && !active)}
                   title={
                     hasActiveJob && !active
@@ -141,7 +112,7 @@ export function EnginePicker({
                 <span className="min-w-0">
                   <span className="flex min-w-0 flex-wrap items-center gap-2">
                     <span className="font-medium leading-snug">{opt.title}</span>
-                    <Badge variant="outline">{ENGINE_SIZE[opt.id]}</Badge>
+                    <Badge variant="outline">{opt.size}</Badge>
                     {opt.badge && <Badge variant="secondary">{opt.badge}</Badge>}
                     {active && (
                       <Badge variant="default" title="Эта модель сейчас выбрана">
@@ -150,8 +121,14 @@ export function EnginePicker({
                     )}
                     {!available && <Badge variant="secondary">Недоступна</Badge>}
                   </span>
+                  <span className="mt-1 block text-xs font-medium text-muted-foreground">
+                    {opt.subtitle}
+                  </span>
                   <span className="mt-1 block whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
-                    {status?.unavailableReason ?? opt.hint}
+                    {status?.unavailableReason ?? opt.detail}
+                  </span>
+                  <span className="mt-1 block whitespace-normal break-words text-[11px] leading-relaxed text-muted-foreground/80">
+                    Модель: {opt.technicalName}
                   </span>
                 </span>
               </button>
@@ -177,7 +154,7 @@ export function EnginePicker({
                     variant="outline"
                     size={preparing ? "sm" : "icon-sm"}
                     disabled={actionBusy}
-                    onClick={() => onPrepare(opt.id)}
+                    onClick={() => onPrepare(opt.engine)}
                     title={prepareLabel}
                     aria-label={prepareLabel}
                   >
@@ -195,7 +172,7 @@ export function EnginePicker({
                     variant="destructive"
                     size="icon-sm"
                     disabled={actionBusy || hasActiveJob}
-                    onClick={() => onDelete(opt.id)}
+                    onClick={() => onDelete(opt.engine)}
                     title={
                       hasActiveJob
                         ? ACTIVE_JOB_DELETE_HINT
@@ -221,6 +198,9 @@ export function EnginePicker({
                 />
                 <div className="break-words text-xs leading-relaxed text-muted-foreground">
                   {progressText(progress, stage)}
+                </div>
+                <div className="break-words text-xs leading-relaxed text-muted-foreground">
+                  {calmProgress.detail}
                 </div>
                 {stage === "downloading" && detailText && (
                   <div className="break-words text-xs leading-relaxed text-muted-foreground">

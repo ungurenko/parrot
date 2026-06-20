@@ -14,6 +14,8 @@ pub(crate) struct EnqueueResult {
 #[tauri::command]
 pub(crate) async fn enqueue_file(
     path: String,
+    engine: Option<String>,
+    language: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<EnqueueResult, String> {
     let p = PathBuf::from(&path);
@@ -24,6 +26,9 @@ pub(crate) async fn enqueue_file(
         return Err("Неподдерживаемый формат файла".into());
     }
     let settings = settings::load(&state.queue.app_handle());
+    let engine = engine.unwrap_or_else(|| settings.engine.clone());
+    let language = language.unwrap_or_else(|| settings.language.clone());
+    validate_job_options(&engine, &language)?;
     let id = queue::new_job_id();
     let display_name = p
         .file_name()
@@ -35,8 +40,8 @@ pub(crate) async fn enqueue_file(
             id: id.clone(),
             source: SourceKind::LocalFile(p),
             display_name,
-            engine: settings.engine,
-            language: settings.language,
+            engine,
+            language,
             save_dir: settings.save_dir,
         })
         .await
@@ -47,6 +52,8 @@ pub(crate) async fn enqueue_file(
 #[tauri::command]
 pub(crate) async fn enqueue_youtube(
     url: String,
+    engine: Option<String>,
+    language: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<EnqueueResult, String> {
     let trimmed = url.trim().to_string();
@@ -54,6 +61,9 @@ pub(crate) async fn enqueue_youtube(
         return Err("URL не похож на YouTube-ссылку".into());
     }
     let settings = settings::load(&state.queue.app_handle());
+    let engine = engine.unwrap_or_else(|| settings.engine.clone());
+    let language = language.unwrap_or_else(|| settings.language.clone());
+    validate_job_options(&engine, &language)?;
     let id = queue::new_job_id();
     state
         .queue
@@ -61,8 +71,8 @@ pub(crate) async fn enqueue_youtube(
             id: id.clone(),
             source: SourceKind::YouTube(trimmed.clone()),
             display_name: trimmed,
-            engine: settings.engine,
-            language: settings.language,
+            engine,
+            language,
             save_dir: settings.save_dir,
         })
         .await
@@ -73,4 +83,14 @@ pub(crate) async fn enqueue_youtube(
 #[tauri::command]
 pub(crate) fn cancel_job(id: String, state: State<'_, AppState>) -> bool {
     state.queue.cancel_registry().cancel(&id)
+}
+
+fn validate_job_options(engine: &str, language: &str) -> Result<(), String> {
+    if !settings::is_supported_engine(engine) {
+        return Err(format!("Неизвестная модель распознавания: {engine}"));
+    }
+    if !settings::is_supported_language(language) {
+        return Err(format!("Неизвестный язык аудио: {language}"));
+    }
+    Ok(())
 }

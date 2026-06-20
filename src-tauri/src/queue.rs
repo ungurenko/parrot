@@ -56,6 +56,10 @@ pub struct JobDoneEvent {
     pub id: String,
     pub text: String,
     pub output_path: String,
+    pub source_kind: String,
+    pub source_value: String,
+    pub engine: String,
+    pub language: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -303,9 +307,12 @@ async fn handle_prepared_outcome(
             match transcribe_prepared(app, prepared, token.clone()).await {
                 Ok((text, out)) => {
                     let output_path_str = out.to_string_lossy().to_string();
+                    let (source_kind, source_value) = source_metadata(&job.source);
                     let entry = HistoryEntry {
                         id: job.id.clone(),
                         source_name: job.display_name.clone(),
+                        source_kind: Some(source_kind.clone()),
+                        source_value: Some(source_value.clone()),
                         engine: job.engine.clone(),
                         language: job.language.clone(),
                         created_at: history::now_iso8601(),
@@ -323,6 +330,10 @@ async fn handle_prepared_outcome(
                             id: job.id.clone(),
                             text,
                             output_path: output_path_str,
+                            source_kind,
+                            source_value,
+                            engine: job.engine.clone(),
+                            language: job.language.clone(),
                         },
                     );
                     cancel.remove(&job.id);
@@ -616,6 +627,15 @@ fn emit_progress(app: &AppHandle, id: &str, stage: &str, percent: u32) {
             percent,
         },
     );
+}
+
+fn source_metadata(source: &SourceKind) -> (String, String) {
+    match source {
+        SourceKind::LocalFile(path) => {
+            ("localFile".to_string(), path.to_string_lossy().to_string())
+        }
+        SourceKind::YouTube(url) => ("youtube".to_string(), url.clone()),
+    }
 }
 
 fn seconds(duration: Duration) -> f64 {
