@@ -70,8 +70,13 @@ pub struct DictationErrorEvent {
 }
 
 enum RecorderCommand {
-    Start,
+    Start { insert_target: Option<InsertTarget> },
     Stop,
+}
+
+struct ActiveRecording {
+    recorder: Recorder,
+    insert_target: Option<InsertTarget>,
 }
 
 struct Recorder {
@@ -87,6 +92,88 @@ struct RecordingStats {
     peak: f32,
     sample_rate: u32,
     duration_secs: f32,
+}
+
+struct AxElement {
+    raw: AXUIElementRef,
+}
+
+unsafe impl Send for AxElement {}
+
+impl AxElement {
+    fn new(raw: AXUIElementRef) -> Result<Self> {
+        if raw.is_null() {
+            anyhow::bail!("Не удалось найти активное поле ввода.");
+        }
+        Ok(Self { raw })
+    }
+
+    fn as_ptr(&self) -> AXUIElementRef {
+        self.raw
+    }
+}
+
+impl Drop for AxElement {
+    fn drop(&mut self) {
+        unsafe { CFRelease(self.raw as CFTypeRef) };
+    }
+}
+
+struct InsertTarget {
+    focused: AxElement,
+}
+
+unsafe impl Send for InsertTarget {}
+
+impl InsertTarget {
+    fn new(focused: AxElement) -> Self {
+        Self { focused }
+    }
+
+    fn insert_text(&self, text: &str) -> Result<()> {
+        set_selected_text(self.focused.as_ptr(), text)
+    }
+
+    fn focus(&self) -> Result<()> {
+        let focused_attr = CFString::from_static_string("AXFocused");
+        let value = core_foundation::boolean::CFBoolean::true_value();
+        let set_error = unsafe {
+            AXUIElementSetAttributeValue(
+                self.focused.as_ptr(),
+                focused_attr.as_concrete_TypeRef(),
+                value.as_CFTypeRef(),
+            )
+        };
+
+        if set_error != K_AX_ERROR_SUCCESS {
+            anyhow::bail!("Не удалось вернуть курсор в исходное поле (AX error {set_error}).");
+        }
+
+        thread::sleep(Duration::from_millis(80));
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InsertAttempt {
+    CapturedAccessibility,
+    CapturedPaste,
+    CurrentAccessibility,
+    CurrentPaste,
+}
+
+fn insertion_attempts(has_captured_target: bool) -> &'static [InsertAttempt] {
+    if has_captured_target {
+        &[
+            InsertAttempt::CapturedAccessibility,
+            InsertAttempt::CapturedPaste,
+        ]
+    } else {
+        &[
+            InsertAttempt::CurrentAccessibility,
+            InsertAttempt::CurrentPaste,
+        ]
+    }
 }
 
 impl DictationManager {
@@ -178,9 +265,17 @@ impl DictationManager {
             inner.command_tx.clone()
         };
 
+        let insert_target = match capture_insert_target() {
+            Ok(target) => Some(target),
+            Err(e) => {
+                tracing::warn!("dictation insert target capture failed: {e:#}");
+                None
+            }
+        };
+
         match tx {
             Some(tx) => {
-                if tx.send(RecorderCommand::Start).is_err() {
+                if tx.send(RecorderCommand::Start { insert_target }).is_err() {
                     self.set_error(
                         app,
                         "Диктовка не запущена: внутренний канал закрыт.".to_string(),
@@ -255,17 +350,20 @@ fn recording_worker(
     manager: DictationManager,
     rx: mpsc::Receiver<RecorderCommand>,
 ) {
-    let mut recorder: Option<Recorder> = None;
+    let mut recorder: Option<ActiveRecording> = None;
 
     while let Ok(command) = rx.recv() {
         match command {
-            RecorderCommand::Start => {
+            RecorderCommand::Start { insert_target } => {
                 if recorder.is_some() {
                     continue;
                 }
                 match Recorder::start() {
                     Ok(active) => {
-                        recorder = Some(active);
+                        recorder = Some(ActiveRecording {
+                            recorder: active,
+                            insert_target,
+                        });
                         manager.mark_recording(&app);
                     }
                     Err(e) => manager.set_error(&app, format!("{e:#}")),
@@ -278,7 +376,8 @@ fn recording_worker(
                 };
 
                 manager.mark_processing(&app);
-                let result = write_recording_to_tmp(&app, active);
+                let insert_target = active.insert_target;
+                let result = write_recording_to_tmp(&app, active.recorder);
                 match result {
                     Ok((raw_wav, normalized_wav, stats)) => {
                         tracing::info!(
@@ -319,7 +418,9 @@ fn recording_worker(
                                         return;
                                     }
                                     match copy_to_clipboard(text.clone()).await {
-                                        Ok(()) => match insert_text(text.clone()).await {
+                                        Ok(()) => match insert_text(text.clone(), insert_target)
+                                            .await
+                                        {
                                             Ok(()) => process_manager.mark_done(&process_app, text),
                                             Err(e) => process_manager.set_error(
                                                 &process_app,
@@ -523,20 +624,39 @@ async fn copy_to_clipboard(text: String) -> Result<()> {
     .await?
 }
 
-async fn insert_text(text: String) -> Result<()> {
+async fn insert_text(text: String, target: Option<InsertTarget>) -> Result<()> {
     tokio::task::spawn_blocking(move || -> Result<()> {
-        match insert_text_with_accessibility(&text) {
-            Ok(()) => {
-                tracing::info!("dictation text inserted through accessibility focused element");
-                Ok(())
-            }
-            Err(accessibility_error) => {
-                tracing::warn!(
-                    "accessibility text insertion failed, falling back to Cmd+V: {accessibility_error:#}"
-                );
-                send_command_v()
+        let mut last_error = None;
+        for attempt in insertion_attempts(target.is_some()) {
+            let result = match attempt {
+                InsertAttempt::CapturedAccessibility => target
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Исходное поле для диктовки не найдено."))
+                    .and_then(|target| target.insert_text(&text)),
+                InsertAttempt::CapturedPaste => target
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Исходное поле для диктовки не найдено."))
+                    .and_then(|target| {
+                        target.focus()?;
+                        send_command_v()
+                    }),
+                InsertAttempt::CurrentAccessibility => insert_text_with_accessibility(&text),
+                InsertAttempt::CurrentPaste => send_command_v(),
+            };
+
+            match result {
+                Ok(()) => {
+                    tracing::info!("dictation text inserted through {attempt:?}");
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!("dictation insertion attempt {attempt:?} failed: {e:#}");
+                    last_error = Some(e);
+                }
             }
         }
+
+        Err(last_error.unwrap_or_else(|| anyhow!("Не удалось вставить текст диктовки.")))
     })
     .await?
 }
@@ -575,6 +695,17 @@ fn post_key_event(
 fn insert_text_with_accessibility(text: &str) -> Result<()> {
     ensure_accessibility_permission()?;
 
+    let focused = copy_focused_ui_element()?;
+    set_selected_text(focused.as_ptr(), text)
+}
+
+fn capture_insert_target() -> Result<InsertTarget> {
+    ensure_accessibility_permission()?;
+
+    copy_focused_ui_element().map(InsertTarget::new)
+}
+
+fn copy_focused_ui_element() -> Result<AxElement> {
     let system = unsafe { AXUIElementCreateSystemWide() };
     if system.is_null() {
         anyhow::bail!("Не удалось получить системный Accessibility-элемент.");
@@ -595,16 +726,19 @@ fn insert_text_with_accessibility(text: &str) -> Result<()> {
         anyhow::bail!("Не удалось найти активное поле ввода (AX error {copy_error}).");
     }
 
+    AxElement::new(focused as AXUIElementRef)
+}
+
+fn set_selected_text(element: AXUIElementRef, text: &str) -> Result<()> {
     let replacement = CFString::new(text);
     let selected_text_attr = CFString::from_static_string("AXSelectedText");
     let set_error = unsafe {
         AXUIElementSetAttributeValue(
-            focused as AXUIElementRef,
+            element,
             selected_text_attr.as_concrete_TypeRef(),
             replacement.as_CFTypeRef(),
         )
     };
-    unsafe { CFRelease(focused) };
 
     if set_error != K_AX_ERROR_SUCCESS {
         anyhow::bail!("Активное поле не приняло прямую вставку (AX error {set_error}).");
@@ -856,5 +990,27 @@ mod tests {
     fn peak_amplitude_handles_empty_slice() {
         let samples: Vec<f32> = Vec::new();
         assert_eq!(peak_amplitude(&samples), 0.0);
+    }
+
+    #[test]
+    fn insertion_attempts_with_captured_target_should_not_use_current_focus() {
+        assert_eq!(
+            insertion_attempts(true),
+            &[
+                InsertAttempt::CapturedAccessibility,
+                InsertAttempt::CapturedPaste,
+            ]
+        );
+    }
+
+    #[test]
+    fn insertion_attempts_without_captured_target_should_use_current_focus() {
+        assert_eq!(
+            insertion_attempts(false),
+            &[
+                InsertAttempt::CurrentAccessibility,
+                InsertAttempt::CurrentPaste,
+            ]
+        );
     }
 }

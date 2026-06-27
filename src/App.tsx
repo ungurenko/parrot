@@ -154,7 +154,10 @@ function App() {
       listenInTauri<{ message: string }>("dictation:error", (e) => {
         window.clearTimeout(doneTimer);
         setDictationPhase("error");
-        toast.error("Диктовка не сработала", { description: e.payload.message });
+        const friendly = userErrorFrom(e.payload.message);
+        toast.error(friendly.title, {
+          description: formatErrorDescription(e.payload.message),
+        });
       }),
     ];
     return () => {

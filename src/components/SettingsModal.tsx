@@ -44,6 +44,7 @@ import {
   isTauriRuntime,
   listenInTauri,
 } from "@/lib/runtime";
+import { formatErrorDescription } from "@/lib/userErrors";
 import {
   DatabaseIcon,
   DownloadIcon,
@@ -360,7 +361,9 @@ function DictationSettingsSection({
               </div>
               <div className="dictation-permission-hint">
                 Без него Parrot сможет скопировать текст, но не вставит его
-                автоматически.
+                автоматически. Если Parrot уже включён в списке, выключите и
+                включите его снова. Если ошибка останется, удалите Parrot из
+                списка и добавьте заново.
               </div>
             </div>
             <Button
@@ -568,8 +571,9 @@ function SummarySettingsSection({
                     )}
                   </span>
                   <span className="mt-1 block whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
-                    {status?.unavailableReason ??
-                      `Разовая загрузка ${SUMMARY_MODEL_SIZE[summaryModel]}. После этого конспекты создаются оффлайн.`}
+                    {status?.unavailableReason
+                      ? formatErrorDescription(status.unavailableReason)
+                      : `Разовая загрузка ${SUMMARY_MODEL_SIZE[summaryModel]}. После этого конспекты создаются оффлайн.`}
                   </span>
                 </span>
               </div>
@@ -814,7 +818,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setSettings(next);
       setModelError(null);
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
     }
   };
 
@@ -835,7 +839,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setSettings(next);
       setModelError(null);
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
     }
   };
 
@@ -852,7 +856,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setSettings(next);
       setModelError(null);
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
     }
   };
 
@@ -874,7 +878,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setModelProgress(100);
       await refreshModelStatuses();
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
     } finally {
       setBusyEngine(null);
     }
@@ -907,7 +911,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setModelProgress(0);
       setModelProgressDetail(null);
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
       await refreshModelStatuses();
     } finally {
       setDeletingEngine(null);
@@ -927,7 +931,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setSettings(next);
       setModelError(null);
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
     }
   };
 
@@ -948,7 +952,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setSummarizerStatus(await invoke<SummarizerStatus>("get_summarizer_status"));
       setSummaryProgress(0);
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
     } finally {
       setSummaryBusy(false);
     }
@@ -967,7 +971,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setSettings(next);
       setModelError(null);
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
     }
   };
 
@@ -991,7 +995,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setModelError(null);
       setShortcutHint(`Сочетание сохранено: ${displayShortcut(shortcut)}`);
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
       setShortcutHint(null);
     } finally {
       setCapturingShortcut(false);
@@ -1053,7 +1057,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       await openUrl(ACCESSIBILITY_SETTINGS_URL);
     } catch (e: unknown) {
       setModelError(
-        `Не удалось открыть настройки macOS автоматически. Откройте вручную: Системные настройки → Конфиденциальность и безопасность → Универсальный доступ. Ошибка: ${String(e)}`,
+        `Не удалось открыть настройки macOS автоматически.\nОткройте вручную: Системные настройки → Конфиденциальность и безопасность → Универсальный доступ.\n${formatErrorDescription(e)}`,
       );
     }
   };
@@ -1103,7 +1107,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setEnvSetupStatus(null);
       await refreshSummarizerStatus();
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
       setEnvSetupStatus(null);
     } finally {
       setEnvSetupBusy(false);
@@ -1134,7 +1138,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
         }
       }
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
     } finally {
       setSummaryBusy(false);
     }
@@ -1159,7 +1163,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       await refreshSummarizerStatus();
       setSummaryProgress(0);
     } catch (e: unknown) {
-      setModelError(String(e));
+      setModelError(formatErrorDescription(e));
     } finally {
       setSummaryDeleting(false);
     }

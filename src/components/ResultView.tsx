@@ -92,7 +92,9 @@ export function ResultView({
       onSettingsChange(next);
       return true;
     } catch (e) {
-      toast.error("Не удалось сохранить настройку", { description: String(e) });
+      toast.error("Не удалось сохранить настройку", {
+        description: formatErrorDescription(e),
+      });
       return false;
     }
   };

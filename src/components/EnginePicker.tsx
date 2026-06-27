@@ -6,6 +6,7 @@ import {
   isSlowModelDownload,
   modelDownloadDetails,
 } from "@/lib/modelProgress";
+import { formatErrorDescription } from "@/lib/userErrors";
 import { ENGINE_MODES } from "@/lib/engineModes";
 import { modelProgressMessage } from "@/lib/progressEstimate";
 import { DownloadIcon, Trash2Icon } from "lucide-react";
@@ -41,6 +42,9 @@ const progressText = (
   return modelProgressMessage({ stage, percent: progress }).title;
 };
 
+const unavailableText = (reason?: string | null) =>
+  reason ? formatErrorDescription(reason) : null;
+
 export function EnginePicker({
   value,
   statuses = {},
@@ -67,6 +71,7 @@ export function EnginePicker({
         const preparing = busyEngine === opt.engine;
         const deleting = deletingEngine === opt.engine;
         const prepareLabel = `Подготовить режим «${opt.title}»`;
+        const unavailable = unavailableText(status?.unavailableReason);
         const detailText = preparing ? modelDownloadDetails(progressDetail) : null;
         const slowDownload = preparing && isSlowModelDownload(progressDetail);
         const calmProgress = modelProgressMessage({
@@ -125,7 +130,7 @@ export function EnginePicker({
                     {opt.subtitle}
                   </span>
                   <span className="mt-1 block whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
-                    {status?.unavailableReason ?? opt.detail}
+                    {unavailable ?? opt.detail}
                   </span>
                   <span className="mt-1 block whitespace-normal break-words text-[11px] leading-relaxed text-muted-foreground/80">
                     Модель: {opt.technicalName}

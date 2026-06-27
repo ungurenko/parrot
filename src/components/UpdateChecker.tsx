@@ -1,6 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { formatErrorDescription } from "@/lib/userErrors";
 import type { AutoUpdate } from "../hooks/useAutoUpdate";
 
 const RELEASES_URL = "https://github.com/ungurenko/parrot/releases/latest";
@@ -41,6 +42,7 @@ export function UpdateChecker({ updater }: Props) {
   const shortDetails = errorDetails
     ? errorDetails.split("\n")[0].slice(0, 140)
     : null;
+  const errorTitle = status === "error" ? (shortDetails ?? undefined) : undefined;
 
   const copyErrorDetails = async () => {
     if (!errorDetails) return;
@@ -48,7 +50,9 @@ export function UpdateChecker({ updater }: Props) {
       await navigator.clipboard.writeText(errorDetails);
       toast.success("Детали ошибки скопированы");
     } catch (e) {
-      toast.error("Не удалось скопировать", { description: String(e) });
+      toast.error("Не удалось скопировать", {
+        description: formatErrorDescription(e),
+      });
     }
   };
 
@@ -62,7 +66,7 @@ export function UpdateChecker({ updater }: Props) {
           onClick={buttonAction}
           disabled={disabled}
           className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
-          title={status === "error" && errorDetails ? errorDetails : undefined}
+          title={errorTitle}
         >
           {label}
         </Button>
@@ -94,7 +98,7 @@ export function UpdateChecker({ updater }: Props) {
       {status === "error" && shortDetails && (
         <span
           className="font-mono text-[10px] leading-tight text-muted-foreground/80"
-          title={errorDetails ?? undefined}
+          title={shortDetails ?? undefined}
         >
           {shortDetails}
         </span>

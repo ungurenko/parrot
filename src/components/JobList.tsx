@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { formatErrorDescription, userErrorFrom } from "@/lib/userErrors";
 import { cn } from "@/lib/utils";
 import type { Job } from "../types";
 
@@ -46,6 +47,12 @@ function progressPercent(job: Job): number {
   return Math.max(job.percent, 3);
 }
 
+function rowTitle(job: Job): string | undefined {
+  if (!job.error || job.error === CANCELLED_MARKER) return undefined;
+  const friendly = userErrorFrom(job.error);
+  return `${friendly.title}\n${formatErrorDescription(job.error)}`;
+}
+
 async function cancelJob(id: string) {
   try {
     await invoke("cancel_job", { id });
@@ -84,7 +91,7 @@ export function JobList({ jobs, onSelect, onCancel, selectedId }: Props) {
                 onSelect(job);
               }
             }}
-            title={job.error ?? undefined}
+            title={rowTitle(job)}
           >
             <span className={cn("led", ledClass(job))} aria-hidden="true" />
             <div className="min-w-0">

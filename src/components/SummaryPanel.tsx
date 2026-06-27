@@ -277,6 +277,9 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
 
   const modelReady = summarizerStatus?.modelReady ?? false;
   const available = summarizerStatus?.available ?? true;
+  const unavailableReason = summarizerStatus?.unavailableReason
+    ? formatErrorDescription(summarizerStatus.unavailableReason)
+    : "Откройте «⚙️ Настройки» → раздел «🪶 Конспект» → нажмите «Установить окружение».";
 
   return (
     <div className="summary-card">
@@ -334,8 +337,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
         <Alert variant="default" className="summary-unavailable">
           <AlertTitle>Окружение для конспекта не установлено</AlertTitle>
           <AlertDescription className="whitespace-pre-wrap break-words">
-            {summarizerStatus?.unavailableReason ??
-              "Откройте «⚙️ Настройки» → раздел «🪶 Конспект» → нажмите «Установить окружение»."}
+            {unavailableReason}
           </AlertDescription>
         </Alert>
       )}

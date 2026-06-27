@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { isTauriRuntime } from "@/lib/runtime";
+import { formatErrorDescription, userErrorFrom } from "@/lib/userErrors";
 
 const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CURRENT_STATUS_TIMEOUT_MS = 3000;
@@ -27,17 +28,25 @@ export interface AutoUpdate {
 }
 
 export function formatUpdateError(error: unknown): string {
-  if (error instanceof Error) {
-    const stack =
-      error.stack && error.stack !== error.message ? error.stack : "";
-    return stack ? `${error.message}\n${stack}` : error.message;
-  }
-  if (typeof error === "string") return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
+  const friendly = formatErrorDescription(error);
+  const technical = (() => {
+    const userError = userErrorFrom(error);
+    if (userError.technical) return userError.technical;
+    if (error instanceof Error) {
+      const stack =
+        error.stack && error.stack !== error.message ? error.stack : "";
+      return stack ? `${error.message}\n${stack}` : error.message;
+    }
+    if (typeof error === "string") return error;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  })();
+
+  if (!technical || technical === friendly) return friendly;
+  return `${friendly}\n\nТехнические детали:\n${technical}`;
 }
 
 /**

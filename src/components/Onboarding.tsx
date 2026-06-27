@@ -22,7 +22,7 @@ import { modelDownloadDetails } from "@/lib/modelProgress";
 import { cleanupTauriListeners, listenInTauri } from "@/lib/runtime";
 import { modeOptionForEngine } from "@/lib/engineModes";
 import { modelProgressMessage } from "@/lib/progressEstimate";
-import { userErrorFrom } from "@/lib/userErrors";
+import { formatErrorDescription, userErrorFrom } from "@/lib/userErrors";
 import {
   type Engine,
   type EngineStatuses,
@@ -85,7 +85,7 @@ export function Onboarding({ onDone }: Props) {
       setSettings(next);
       setError(null);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(formatErrorDescription(e));
     }
   };
 
@@ -97,7 +97,7 @@ export function Onboarding({ onDone }: Props) {
       setSettings(next);
       setError(null);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(formatErrorDescription(e));
     }
   };
 
