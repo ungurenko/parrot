@@ -1,4 +1,5 @@
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { toast } from "sonner";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -817,6 +818,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       await invoke("set_settings", { new: next });
       setSettings(next);
       setModelError(null);
+      toast.success("Сохранено");
     } catch (e: unknown) {
       setModelError(formatErrorDescription(e));
     }
@@ -838,6 +840,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       await invoke("set_settings", { new: next });
       setSettings(next);
       setModelError(null);
+      toast.success("Сохранено");
     } catch (e: unknown) {
       setModelError(formatErrorDescription(e));
     }
@@ -855,6 +858,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       await invoke("set_settings", { new: next });
       setSettings(next);
       setModelError(null);
+      toast.success("Сохранено");
     } catch (e: unknown) {
       setModelError(formatErrorDescription(e));
     }
@@ -910,6 +914,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       await refreshModelStatuses();
       setModelProgress(0);
       setModelProgressDetail(null);
+      toast.success("Модель удалена");
     } catch (e: unknown) {
       setModelError(formatErrorDescription(e));
       await refreshModelStatuses();

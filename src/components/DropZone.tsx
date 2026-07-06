@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { FileAudioIcon, FileVideoIcon, FolderOpenIcon } from "lucide-react";
@@ -32,11 +33,19 @@ export function DropZone({ onFiles }: Props) {
           setHovering(true);
         } else if (event.payload.type === "drop") {
           setHovering(false);
-          const paths = event.payload.paths.filter((p) => {
+          const dropped = event.payload.paths;
+          const paths = dropped.filter((p) => {
             const ext = p.split(".").pop()?.toLowerCase() ?? "";
             return AUDIO_EXTS.includes(ext) || VIDEO_EXTS.includes(ext);
           });
-          if (paths.length > 0) onFiles(paths);
+          if (paths.length > 0) {
+            onFiles(paths);
+          } else if (dropped.length > 0) {
+            toast.error("Файл не подходит", {
+              description:
+                "Parrot понимает аудио и видео: MP3, M4A, WAV, MP4, MOV. Выберите другой файл.",
+            });
+          }
         } else {
           setHovering(false);
         }

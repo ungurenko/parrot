@@ -125,7 +125,15 @@ export function ProcessingView({ job, onCancel }: Props) {
     percent: job.percent,
     elapsedMs: Date.now() - startedAtRef.current,
   });
-  const status = job.status === "running" ? calmProgress.title : statusText(job);
+  const nearingEnd =
+    job.status === "running" &&
+    job.stage === "transcribing" &&
+    job.percent >= 95;
+  const status = job.status === "running"
+    ? nearingEnd
+      ? "Почти готово…"
+      : calmProgress.title
+    : statusText(job);
   const percent = job.status === "running" ? Math.max(job.percent, 3) : 0;
 
   const bars = useMemo(() => {
@@ -165,7 +173,11 @@ export function ProcessingView({ job, onCancel }: Props) {
           </h3>
           <p className="proc-status">{status}</p>
           {job.status === "running" && (
-            <p className="proc-detail">{calmProgress.detail}</p>
+            <p className="proc-detail">
+              {nearingEnd
+                ? "Дорабатываю последнюю часть. Это нормально, если немного задержится."
+                : calmProgress.detail}
+            </p>
           )}
           <div className="progress-track">
             <div

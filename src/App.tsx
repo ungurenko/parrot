@@ -99,6 +99,14 @@ function parseShortcut(shortcut: string): string[] {
     .map((part) => SHORTCUT_GLYPH[part] ?? part.toUpperCase());
 }
 
+function pluralFiles(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return "файл";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "файла";
+  return "файлов";
+}
+
 function App() {
   const [jobs, dispatchJobs] = useReducer(jobsReducer, []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -177,14 +185,21 @@ function App() {
 
   const handleFiles = useCallback(async (paths: string[]) => {
     if (!isTauriRuntime()) return;
+    let queued = 0;
     for (const p of paths) {
       try {
         await invoke("enqueue_file", { path: p });
+        queued += 1;
       } catch (e) {
         console.error("enqueue_file failed:", e);
         const friendly = userErrorFrom(e);
         toast.error(friendly.title, { description: formatErrorDescription(e) });
       }
+    }
+    if (queued === 1) {
+      toast.success("Добавил файл, начинаю…");
+    } else if (queued > 1) {
+      toast.success(`Добавил ${queued} ${pluralFiles(queued)} в очередь`);
     }
   }, []);
 
@@ -359,7 +374,7 @@ function App() {
               type="button"
               className="pill engine-pill"
               onClick={() => setSettingsOpen(true)}
-              title="Нажмите, чтобы сменить движок"
+              title="Открыть настройки распознавания"
             >
               <span className="truncate">{engineLabel}</span>
               <ChevronDownIcon
@@ -413,7 +428,10 @@ function App() {
               historyEntries={history}
               onOpenHistory={handleOpenHistory}
               onDeleteHistory={deleteEntry}
-              onClearHistory={clearAll}
+              onClearHistory={() => {
+                clearAll();
+                toast.success("История очищена");
+              }}
               onRepeatHistory={handleRepeatHistory}
               onOpenSettings={() => setSettingsOpen(true)}
             />
