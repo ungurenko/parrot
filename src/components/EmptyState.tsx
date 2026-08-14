@@ -2,12 +2,7 @@ import { DropZone } from "./DropZone";
 import { YouTubeInput } from "./YouTubeInput";
 import { HistoryList } from "./HistoryList";
 import type { HistoryEntry } from "../types";
-import {
-  ChevronRightIcon,
-  FolderOpenIcon,
-  LockKeyholeIcon,
-  Settings2Icon,
-} from "lucide-react";
+import { LockKeyholeIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -19,7 +14,6 @@ interface Props {
   onDeleteHistory?: (id: string) => void;
   onClearHistory?: () => void;
   onRepeatHistory?: (entry: HistoryEntry) => void;
-  onOpenSettings?: () => void;
 }
 
 export function EmptyState({
@@ -31,7 +25,6 @@ export function EmptyState({
   onDeleteHistory,
   onClearHistory,
   onRepeatHistory,
-  onOpenSettings,
 }: Props) {
   const showHistory =
     historyEntries.length > 0 &&
@@ -55,7 +48,7 @@ export function EmptyState({
             <span className="privacy-badge" aria-hidden="true">
               <LockKeyholeIcon size={15} />
             </span>
-            Всё обрабатывается локально — ничего не уходит в сеть.
+            Локально{engineLabel ? ` · ${engineLabel}` : ""}
           </span>
           <span className="kbd-row">
             <span className="muted">Быстрый старт:</span>
@@ -63,25 +56,6 @@ export function EmptyState({
             <span className="kbd-key">O</span>
             <span className="muted">открыть файл</span>
           </span>
-        </div>
-        <div className="workspace-status-row">
-          <span className="workspace-status-dot" aria-hidden="true" />
-          <span className="workspace-status-copy">
-            <strong>{engineLabel ?? "Локальный движок"}</strong>
-            <span>готов к транскрипции</span>
-          </span>
-          <button
-            type="button"
-            className="workspace-status-action"
-            onClick={onOpenSettings}
-          >
-            <Settings2Icon size={15} aria-hidden="true" />
-            Настроить
-          </button>
-        </div>
-        <div className="workspace-footnote">
-          <FolderOpenIcon size={15} aria-hidden="true" />
-          <span>Поддерживаются аудио, видео и ссылки на YouTube.</span>
         </div>
       </div>
       {showHistory && (
@@ -93,19 +67,6 @@ export function EmptyState({
             onClear={onClearHistory!}
             onRepeat={onRepeatHistory!}
           />
-          <button
-            type="button"
-            className="side-status-card"
-            onClick={onOpenSettings}
-            aria-label="Открыть настройки движка"
-          >
-            <span className="side-status-dot" aria-hidden="true" />
-            <div>
-              <div className="side-status-title">{engineLabel ?? "Движок"}</div>
-              <div className="side-status-text">Настройки распознавания</div>
-            </div>
-            <ChevronRightIcon size={18} aria-hidden="true" />
-          </button>
         </aside>
       )}
     </div>

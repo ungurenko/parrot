@@ -450,7 +450,6 @@ function App() {
                 toast.success("История очищена");
               }}
               onRepeatHistory={handleRepeatHistory}
-              onOpenSettings={() => setSettingsOpen(true)}
             />
           )}
           {view.kind === "processing" && (
