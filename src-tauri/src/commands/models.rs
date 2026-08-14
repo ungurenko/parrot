@@ -99,6 +99,7 @@ async fn download_model_inner(
             model::download_parakeet(app.clone(), &dir, &token)
                 .await
                 .map_err(|e| e.to_string())?;
+            transcriber_parakeet::spawn_mlx_install(app.clone());
         }
         "whisper" => {
             let main = paths::model_path(&app).map_err(|e| e.to_string())?;

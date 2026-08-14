@@ -950,13 +950,13 @@ fn extract_tar_gz(archive: &Path, dest_parent: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Bootstrap the user-space MLX venv: ensure Python is downloaded, create
-/// the venv, upgrade pip, install MLX runtimes. Idempotent — if everything is
-/// already present, returns quickly. Streams progress lines via `on_progress`.
-pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -> Result<()> {
-    // Step 0 — ensure standalone Python is on disk (downloads on first run).
+/// Download standalone Python and create the user-space venv if needed.
+/// Returns the venv `bin/python`. Idempotent.
+pub(crate) fn ensure_user_python_venv<F: Fn(&str) + Send + Sync>(
+    app: &AppHandle,
+    on_progress: F,
+) -> Result<PathBuf> {
     let python_bin = ensure_standalone_python(app, &on_progress)?;
-
     let env_dir = paths::qwen_env_dir(app)?;
     let venv_python = env_dir.join("bin/python");
 
@@ -964,7 +964,6 @@ pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -
         std::fs::create_dir_all(parent).context("Не удалось создать каталог окружения")?;
     }
 
-    // Step 1 — create venv if missing.
     if !venv_python.exists() {
         on_progress("Создаю Python venv…");
         let out = Command::new(&python_bin)
@@ -987,6 +986,15 @@ pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -
         on_progress("Использую существующий venv");
     }
 
+    Ok(venv_python)
+}
+
+/// Bootstrap the user-space MLX venv: ensure Python is downloaded, create
+/// the venv, upgrade pip, install MLX runtimes. Idempotent — if everything is
+/// already present, returns quickly. Streams progress lines via `on_progress`.
+pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -> Result<()> {
+    let venv_python = ensure_user_python_venv(app, &on_progress)?;
+
     // Step 2 — upgrade pip (best-effort; skip failure to keep going).
     on_progress("Обновляю pip…");
     let _ = Command::new(&venv_python)
@@ -1007,6 +1015,7 @@ pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -
             "mlx==0.31.1",
             "mlx-lm==0.31.2",
             "mlx-vlm==0.4.3",
+            "parakeet-mlx==0.5.2",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

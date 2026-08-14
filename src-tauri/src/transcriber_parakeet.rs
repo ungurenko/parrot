@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use once_cell::sync::Lazy;
 use parakeet_rs::{
     ExecutionConfig as ParakeetExecConfig, ExecutionProvider, ParakeetTDT, Transcriber,
@@ -6,7 +6,9 @@ use parakeet_rs::{
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
 
 // Parakeet TDT has a ~8-10 min sequence-length limit. Five-minute chunks are
 // the stable path for long lectures and interviews.
@@ -16,13 +18,18 @@ const MIN_FINAL_CHUNK_SECONDS: usize = 30;
 const SAMPLE_RATE: u32 = 16_000;
 
 static MODEL: Lazy<Mutex<Option<Arc<Mutex<ParakeetTDT>>>>> = Lazy::new(|| Mutex::new(None));
-static MLX_PYTHON: Lazy<Option<PathBuf>> = Lazy::new(detect_mlx_python);
+static MLX_PYTHON: Mutex<Option<Option<PathBuf>>> = Mutex::new(None);
+static MLX_INSTALL_STARTED: AtomicBool = AtomicBool::new(false);
+
+const MLX_MODEL: &str = "mlx-community/parakeet-tdt-0.6b-v3";
+const MLX_READY_MARKER: &str = ".parrot-ready-parakeet-mlx";
+const MLX_PACKAGE: &str = "parakeet-mlx==0.5.2";
 
 const MLX_TRANSCRIBE_SCRIPT: &str = r#"
 import sys
 from parakeet_mlx import from_pretrained
-model = from_pretrained("mlx-community/parakeet-tdt-0.6b-v3")
-print(model.transcribe(sys.argv[1], chunk_duration=120.0, overlap_duration=15.0).text)
+model = from_pretrained(sys.argv[1])
+print(model.transcribe(sys.argv[2], chunk_duration=120.0, overlap_duration=15.0).text)
 "#;
 
 pub fn preload(model_dir: &Path) -> Result<()> {
@@ -32,6 +39,51 @@ pub fn preload(model_dir: &Path) -> Result<()> {
 
 pub fn clear_cache() {
     *MODEL.lock() = None;
+}
+
+pub fn refresh_mlx_python() {
+    *MLX_PYTHON.lock() = Some(detect_mlx_python());
+}
+
+fn current_mlx_python() -> Option<PathBuf> {
+    let mut guard = MLX_PYTHON.lock();
+    if guard.is_none() {
+        *guard = Some(detect_mlx_python());
+    }
+    guard.clone().flatten()
+}
+
+pub fn is_mlx_ready() -> bool {
+    current_mlx_python().is_some()
+}
+
+/// Install Python + parakeet-mlx + download weights in the background.
+/// Transcription keeps using ONNX until this finishes.
+pub fn spawn_mlx_install(app: AppHandle) {
+    if is_mlx_ready() {
+        return;
+    }
+    if MLX_INSTALL_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let emit_app = app.clone();
+        let result = install_mlx_runtime(&app, |line| {
+            let _ = emit_app.emit("parakeet_mlx:progress", line.to_string());
+        });
+        match result {
+            Ok(()) => {
+                refresh_mlx_python();
+                tracing::info!("Parakeet MLX runtime is ready");
+                let _ = app.emit("parakeet_mlx:ready", ());
+            }
+            Err(e) => {
+                MLX_INSTALL_STARTED.store(false, Ordering::SeqCst);
+                tracing::error!("Parakeet MLX install failed: {e:#}");
+                let _ = app.emit("parakeet_mlx:error", e.to_string());
+            }
+        }
+    });
 }
 
 fn get_or_load_model(model_dir: &Path) -> Result<Arc<Mutex<ParakeetTDT>>> {
@@ -113,6 +165,91 @@ fn mlx_hf_home() -> Option<PathBuf> {
         .map(|home| home.join("Library/Application Support/com.alexk.parrot/models/qwen-mlx"))
 }
 
+fn mlx_ready_marker_path(cache_dir: &Path) -> PathBuf {
+    cache_dir.join(MLX_READY_MARKER)
+}
+
+fn mlx_ready_marker_exists(cache_dir: &Path) -> bool {
+    mlx_ready_marker_path(cache_dir).is_file()
+}
+
+fn write_mlx_ready_marker(cache_dir: &Path) -> Result<()> {
+    std::fs::write(mlx_ready_marker_path(cache_dir), b"ok")?;
+    Ok(())
+}
+
+fn install_mlx_runtime(app: &AppHandle, on_progress: impl Fn(&str) + Send + Sync) -> Result<()> {
+    let venv_python = crate::summarizer_qwen3::ensure_user_python_venv(app, &on_progress)?;
+    if mlx_python_has_package(&venv_python) {
+        if let Ok(cache) = crate::paths::qwen_cache_dir(app) {
+            if mlx_ready_marker_exists(&cache) {
+                on_progress("Ускорение уже готово");
+                return Ok(());
+            }
+        }
+    } else {
+        on_progress("Устанавливаю ускорение Parakeet…");
+        let out = Command::new(&venv_python)
+            .args([
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                MLX_PACKAGE,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .context("Не удалось запустить pip install parakeet-mlx")?;
+        if !out.status.success() {
+            return Err(anyhow!(
+                "Не удалось установить parakeet-mlx: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        if !mlx_python_has_package(&venv_python) {
+            return Err(anyhow!("parakeet-mlx не импортируется после установки"));
+        }
+    }
+
+    on_progress("Скачиваю быструю модель…");
+    warmup_mlx_model(app, &venv_python, &on_progress)?;
+    on_progress("Готово");
+    Ok(())
+}
+
+fn warmup_mlx_model(app: &AppHandle, python: &Path, on_progress: &impl Fn(&str)) -> Result<()> {
+    let cache_dir = crate::paths::qwen_cache_dir(app)?;
+    if mlx_ready_marker_exists(&cache_dir) {
+        return Ok(());
+    }
+    let tmp = crate::paths::tmp_dir(app)?;
+    let warmup_wav = tmp.join("parakeet-mlx-warmup.wav");
+    write_silent_wav(&warmup_wav)?;
+    on_progress("Прогреваю модель…");
+    let result = transcribe_with_mlx(python, &warmup_wav, &|_| {});
+    let _ = std::fs::remove_file(&warmup_wav);
+    result?;
+    write_mlx_ready_marker(&cache_dir)?;
+    Ok(())
+}
+
+fn write_silent_wav(path: &Path) -> Result<()> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: SAMPLE_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec)?;
+    for _ in 0..SAMPLE_RATE {
+        writer.write_sample::<i16>(0)?;
+    }
+    writer.finalize()?;
+    Ok(())
+}
+
 fn transcribe_with_mlx(
     python: &Path,
     wav_path: &Path,
@@ -127,6 +264,7 @@ fn transcribe_with_mlx(
         .env("HF_HUB_DISABLE_TELEMETRY", "1")
         .arg("-c")
         .arg(MLX_TRANSCRIBE_SCRIPT)
+        .arg(MLX_MODEL)
         .arg(wav_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -155,8 +293,8 @@ pub fn transcribe_wav(
     wav_path: &Path,
     progress_cb: impl Fn(u32) + Send + Sync,
 ) -> Result<String> {
-    if let Some(python) = MLX_PYTHON.as_ref() {
-        match transcribe_with_mlx(python, wav_path, &progress_cb) {
+    if let Some(python) = current_mlx_python() {
+        match transcribe_with_mlx(&python, wav_path, &progress_cb) {
             Ok(text) if !text.is_empty() => return Ok(text),
             Ok(_) => tracing::warn!("parakeet-mlx returned empty text, falling back to ONNX"),
             Err(e) => tracing::warn!("parakeet-mlx failed, falling back to ONNX: {e:#}"),
@@ -404,6 +542,20 @@ mod tests {
         let resolved = resolve_mlx_python(None, std::slice::from_ref(&root));
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(resolved, Some(python));
+    }
+
+    #[test]
+    fn mlx_ready_marker_should_round_trip() {
+        let dir =
+            std::env::temp_dir().join(format!("parrot-parakeet-mlx-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        assert!(!mlx_ready_marker_exists(&dir));
+        write_mlx_ready_marker(&dir).expect("write marker");
+        assert!(mlx_ready_marker_exists(&dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

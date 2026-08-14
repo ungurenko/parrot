@@ -167,6 +167,23 @@ function App() {
           description: formatErrorDescription(e.payload.message),
         });
       }),
+      listenInTauri<string>("parakeet_mlx:progress", (e) => {
+        if (
+          e.payload.includes("Устанавливаю") ||
+          e.payload.includes("Скачиваю")
+        ) {
+          toast.message("Готовлю ускорение распознавания", {
+            id: "parakeet-mlx",
+            description: e.payload,
+          });
+        }
+      }),
+      listenInTauri("parakeet_mlx:ready", () => {
+        toast.success("Распознавание ускорено", {
+          id: "parakeet-mlx",
+          description: "Следующие файлы пойдут быстрее",
+        });
+      }),
     ];
     return () => {
       window.clearTimeout(doneTimer);

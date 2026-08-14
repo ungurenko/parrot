@@ -100,6 +100,9 @@ fn set_settings(
     settings::save(&app, &new).map_err(|e| e.to_string())?;
     if old.engine != new.engine {
         preload_active_engine(app.clone());
+        if new.engine == "parakeet" {
+            transcriber_parakeet::spawn_mlx_install(app.clone());
+        }
     }
     if old.summary_model != new.summary_model {
         summarizer_qwen3::stop_server();
@@ -300,6 +303,9 @@ pub fn run() {
             }
 
             preload_active_engine(handle.clone());
+            if s.engine == "parakeet" {
+                transcriber_parakeet::spawn_mlx_install(handle.clone());
+            }
             if s.summarizer_enabled {
                 summarizer_qwen3::preload_server(handle.clone());
             }
