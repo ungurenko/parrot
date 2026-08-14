@@ -6,7 +6,7 @@ use tauri::AppHandle;
 use crate::{paths, summarizer_models};
 
 pub const DEFAULT_ENGINE: &str = "parakeet";
-pub const DEFAULT_LANGUAGE: &str = "auto";
+pub const DEFAULT_LANGUAGE: &str = "ru";
 pub const DEFAULT_DICTATION_SHORTCUT: &str = "Alt+Space";
 pub const SUPPORTED_ENGINES: [&str; 4] = ["parakeet", "qwen-0.6b", "qwen-1.7b", "whisper"];
 pub const SUPPORTED_LANGUAGES: [&str; 9] = ["auto", "ru", "en", "de", "fr", "es", "it", "pt", "uk"];

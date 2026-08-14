@@ -22,7 +22,8 @@ pub fn clear_cache() {
 fn get_or_load_context(model_path: &Path) -> Result<Arc<WhisperContext>> {
     let mut guard = CONTEXT.lock();
     if guard.is_none() {
-        let params = WhisperContextParameters::default();
+        let mut params = WhisperContextParameters::default();
+        params.flash_attn(true);
         let ctx = WhisperContext::new_with_params(
             model_path
                 .to_str()
@@ -47,6 +48,8 @@ pub fn transcribe_wav(
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(preferred_threads() as i32);
     params.set_language(whisper_language(language));
+    params.set_no_context(true);
+    params.set_no_timestamps(true);
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
@@ -96,4 +99,21 @@ fn preferred_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get().min(8))
         .unwrap_or(4)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn whisper_language_should_keep_explicit_code() {
+        assert_eq!(whisper_language("ru"), Some("ru"));
+        assert_eq!(whisper_language("en"), Some("en"));
+    }
+
+    #[test]
+    fn whisper_language_should_map_blank_to_auto() {
+        assert_eq!(whisper_language("auto"), Some("auto"));
+        assert_eq!(whisper_language(""), Some("auto"));
+    }
 }

@@ -22,7 +22,7 @@ pub async fn extract_wav(
         if cancel.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
             return Err(anyhow!("cancelled"));
         }
-        tokio::fs::copy(input, out_wav).await?;
+        stage_normalized_wav(input, out_wav)?;
         if cancel.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
             let _ = tokio::fs::remove_file(out_wav).await;
             return Err(anyhow!("cancelled"));
@@ -81,6 +81,19 @@ pub async fn extract_wav(
     Ok(out_wav.to_path_buf())
 }
 
+fn stage_normalized_wav(input: &Path, out_wav: &Path) -> Result<()> {
+    if out_wav.exists() {
+        std::fs::remove_file(out_wav)?;
+    }
+    match std::fs::hard_link(input, out_wav) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            std::fs::copy(input, out_wav)?;
+            Ok(())
+        }
+    }
+}
+
 fn is_normalized_wav(path: &Path) -> bool {
     let Ok(reader) = hound::WavReader::open(path) else {
         return false;
@@ -124,6 +137,29 @@ mod tests {
         assert!(!is_normalized_wav(&path));
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn stage_normalized_wav_should_reuse_inode_and_keep_source() {
+        let src = temp_wav_path("stage-src");
+        let dest = temp_wav_path("stage-dest");
+        write_wav(&src, 16_000, 1);
+
+        stage_normalized_wav(&src, &dest).expect("stage wav");
+
+        assert!(dest.exists());
+        let src_meta = std::fs::metadata(&src).expect("src meta");
+        let dest_meta = std::fs::metadata(&dest).expect("dest meta");
+        assert_eq!(src_meta.len(), dest_meta.len());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(src_meta.ino(), dest_meta.ino());
+        }
+
+        std::fs::remove_file(&dest).expect("remove dest");
+        assert!(src.exists(), "source wav must survive temp cleanup");
+        let _ = std::fs::remove_file(src);
     }
 
     fn temp_wav_path(name: &str) -> PathBuf {

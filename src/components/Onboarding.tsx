@@ -134,7 +134,7 @@ export function Onboarding({ onDone }: Props) {
   const finish = async () => {
     if (settings) {
       await invoke("set_settings", {
-        new: { ...settings, language: settings.language ?? "auto", onboarded: true },
+        new: { ...settings, language: settings.language ?? "ru", onboarded: true },
       });
     }
     onDone();

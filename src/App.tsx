@@ -40,7 +40,7 @@ const BROWSER_PREVIEW_SETTINGS: Settings = {
   save_dir: "",
   onboarded: true,
   engine: "parakeet",
-  language: "auto",
+  language: "ru",
   summarizer_enabled: false,
   summary_model: DEFAULT_SUMMARY_MODEL,
   summarizer_promo_seen: true,

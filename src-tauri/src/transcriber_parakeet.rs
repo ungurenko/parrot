@@ -4,7 +4,8 @@ use parakeet_rs::{
     ExecutionConfig as ParakeetExecConfig, ExecutionProvider, ParakeetTDT, Transcriber,
 };
 use parking_lot::Mutex;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 // Parakeet TDT has a ~8-10 min sequence-length limit. Five-minute chunks are
@@ -15,6 +16,14 @@ const MIN_FINAL_CHUNK_SECONDS: usize = 30;
 const SAMPLE_RATE: u32 = 16_000;
 
 static MODEL: Lazy<Mutex<Option<Arc<Mutex<ParakeetTDT>>>>> = Lazy::new(|| Mutex::new(None));
+static MLX_PYTHON: Lazy<Option<PathBuf>> = Lazy::new(detect_mlx_python);
+
+const MLX_TRANSCRIBE_SCRIPT: &str = r#"
+import sys
+from parakeet_mlx import from_pretrained
+model = from_pretrained("mlx-community/parakeet-tdt-0.6b-v3")
+print(model.transcribe(sys.argv[1], chunk_duration=120.0, overlap_duration=15.0).text)
+"#;
 
 pub fn preload(model_dir: &Path) -> Result<()> {
     get_or_load_model(model_dir)?;
@@ -47,11 +56,113 @@ fn get_or_load_model(model_dir: &Path) -> Result<Arc<Mutex<ParakeetTDT>>> {
     Ok(guard.as_ref().unwrap().clone())
 }
 
+fn detect_mlx_python() -> Option<PathBuf> {
+    resolve_mlx_python(
+        std::env::var_os("PARROT_PARAKEET_MLX_PYTHON").map(PathBuf::from),
+        &mlx_candidate_roots(),
+    )
+    .filter(|python| mlx_python_has_package(python))
+}
+
+fn resolve_mlx_python(explicit: Option<PathBuf>, roots: &[PathBuf]) -> Option<PathBuf> {
+    if let Some(path) = explicit {
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    roots.iter().find_map(|root| {
+        let path = root.join(".qwen-mlx/venv/bin/python");
+        path.is_file().then_some(path)
+    })
+}
+
+fn mlx_candidate_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join("Library/Application Support/com.alexk.parrot"));
+    }
+    if let Ok(current) = std::env::current_dir() {
+        roots.push(current.clone());
+        if let Some(parent) = current.parent() {
+            roots.push(parent.to_path_buf());
+        }
+    }
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    roots.push(manifest_dir.clone());
+    if let Some(parent) = manifest_dir.parent() {
+        roots.push(parent.to_path_buf());
+    }
+    roots
+}
+
+fn mlx_python_has_package(python: &Path) -> bool {
+    Command::new(python)
+        .args(["-c", "import parakeet_mlx"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn mlx_hf_home() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("HF_HOME") {
+        return Some(PathBuf::from(path));
+    }
+    dirs::home_dir()
+        .map(|home| home.join("Library/Application Support/com.alexk.parrot/models/qwen-mlx"))
+}
+
+fn transcribe_with_mlx(
+    python: &Path,
+    wav_path: &Path,
+    progress_cb: &impl Fn(u32),
+) -> Result<String> {
+    progress_cb(5);
+    let mut command = Command::new(python);
+    if let Some(cache) = mlx_hf_home() {
+        command.env("HF_HOME", cache);
+    }
+    let output = command
+        .env("HF_HUB_DISABLE_TELEMETRY", "1")
+        .arg("-c")
+        .arg(MLX_TRANSCRIBE_SCRIPT)
+        .arg(wav_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()?;
+    if !output.status.success() {
+        let tail = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "parakeet-mlx failed: {}",
+            tail.trim()
+                .lines()
+                .rev()
+                .take(8)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    progress_cb(100);
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 pub fn transcribe_wav(
     model_dir: &Path,
     wav_path: &Path,
     progress_cb: impl Fn(u32) + Send + Sync,
 ) -> Result<String> {
+    if let Some(python) = MLX_PYTHON.as_ref() {
+        match transcribe_with_mlx(python, wav_path, &progress_cb) {
+            Ok(text) if !text.is_empty() => return Ok(text),
+            Ok(_) => tracing::warn!("parakeet-mlx returned empty text, falling back to ONNX"),
+            Err(e) => tracing::warn!("parakeet-mlx failed, falling back to ONNX: {e:#}"),
+        }
+    }
+
     let model = get_or_load_model(model_dir)?;
 
     let chunk_size = CHUNK_SECONDS * SAMPLE_RATE as usize;
@@ -269,6 +380,33 @@ mod tests {
     }
 
     #[test]
+    fn resolve_mlx_python_should_prefer_explicit_file() {
+        let python = std::env::temp_dir().join(format!(
+            "parrot-mlx-python-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::write(&python, b"#!/bin/sh\n").expect("write fake python");
+        let resolved = resolve_mlx_python(Some(python.clone()), &[]);
+        let _ = std::fs::remove_file(&python);
+        assert_eq!(resolved, Some(python));
+    }
+
+    #[test]
+    fn resolve_mlx_python_should_find_venv_under_root() {
+        let root = std::env::temp_dir().join(format!("parrot-mlx-root-{}", std::process::id()));
+        let python = root.join(".qwen-mlx/venv/bin/python");
+        std::fs::create_dir_all(python.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&python, b"#!/bin/sh\n").expect("write fake python");
+        let resolved = resolve_mlx_python(None, std::slice::from_ref(&root));
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(resolved, Some(python));
+    }
+
+    #[test]
     #[ignore = "manual performance guard: run with `cargo test --release bench_read_wav_samples -- --ignored --nocapture`"]
     fn bench_read_wav_samples() {
         let path = std::env::temp_dir().join(format!(
@@ -311,26 +449,43 @@ mod tests {
             return;
         }
 
-        let path = std::env::temp_dir().join(format!(
-            "parrot-parakeet-transcribe-bench-{}.wav",
-            std::process::id()
-        ));
-        let duration_seconds = std::env::var("PARROT_TRANSCRIBE_BENCH_SECONDS")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(600);
-        write_synthetic_wav(&path, SAMPLE_RATE * duration_seconds);
+        let env_wav = std::env::var_os("PARROT_TRANSCRIBE_BENCH_WAV").map(std::path::PathBuf::from);
+        let (path, duration_seconds, cleanup) = if let Some(path) = env_wav {
+            let reader = hound::WavReader::open(&path).expect("open bench wav");
+            let duration = reader.duration() as f64 / f64::from(reader.spec().sample_rate);
+            (path, duration, false)
+        } else {
+            let path = std::env::temp_dir().join(format!(
+                "parrot-parakeet-transcribe-bench-{}.wav",
+                std::process::id()
+            ));
+            let duration_seconds = std::env::var("PARROT_TRANSCRIBE_BENCH_SECONDS")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(600.0);
+            write_synthetic_wav(&path, (f64::from(SAMPLE_RATE) * duration_seconds) as u32);
+            (path, duration_seconds, true)
+        };
         preload(&model_dir).expect("preload model");
 
         let started = Instant::now();
-        let text = transcribe_wav(&model_dir, &path, |_| {}).expect("transcribe synthetic wav");
+        let text = transcribe_wav(&model_dir, &path, |_| {}).expect("transcribe bench wav");
         let elapsed = started.elapsed();
-        let _ = std::fs::remove_file(&path);
+        if cleanup {
+            let _ = std::fs::remove_file(&path);
+        }
 
+        let rtf = duration_seconds / elapsed.as_secs_f64();
+        if let Some(out) = std::env::var_os("PARROT_TRANSCRIBE_BENCH_OUT") {
+            std::fs::write(&out, &text).expect("write bench transcript");
+        }
         println!(
-            "parakeet synthetic {duration_seconds}s benchmark: {:.3}s, text chars {}",
+            "PARROT_BENCH engine=parakeet-onnx-cpu audio={:.1}s elapsed={:.3}s rtf={:.2}x chars={} label={}",
+            duration_seconds,
             elapsed.as_secs_f64(),
-            text.len()
+            rtf,
+            text.len(),
+            if cleanup { "synthetic" } else { "file" }
         );
     }
 
