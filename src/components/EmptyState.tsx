@@ -8,7 +8,6 @@ import { cn } from "@/lib/utils";
 interface Props {
   onFiles: (paths: string[]) => void;
   onYouTube: (url: string) => void;
-  engineLabel?: string;
   historyEntries?: HistoryEntry[];
   onOpenHistory?: (id: string) => void;
   onDeleteHistory?: (id: string) => void;
@@ -19,7 +18,6 @@ interface Props {
 export function EmptyState({
   onFiles,
   onYouTube,
-  engineLabel,
   historyEntries = [],
   onOpenHistory,
   onDeleteHistory,
@@ -40,7 +38,7 @@ export function EmptyState({
       <div className="empty-main">
         <DropZone onFiles={onFiles} />
         <div className="youtube-divider">
-          <span>…или вставьте ссылку на YouTube</span>
+          <span>или ссылка на YouTube</span>
         </div>
         <YouTubeInput onSubmit={onYouTube} />
         <div className="hints">
@@ -48,7 +46,7 @@ export function EmptyState({
             <span className="privacy-badge" aria-hidden="true">
               <LockKeyholeIcon size={15} />
             </span>
-            Локально{engineLabel ? ` · ${engineLabel}` : ""}
+            Всё остаётся на этом Mac
           </span>
           <span className="kbd-row">
             <span className="muted">Быстрый старт:</span>

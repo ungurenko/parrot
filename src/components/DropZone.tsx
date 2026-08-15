@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { FileAudioIcon, FileVideoIcon, FolderOpenIcon } from "lucide-react";
+import { FolderOpenIcon } from "lucide-react";
 import parrotImg from "/parrot.png";
 import { cn } from "@/lib/utils";
 import { isTauriRuntime } from "@/lib/runtime";
@@ -13,13 +13,7 @@ interface Props {
 
 const AUDIO_EXTS = ["mp3", "wav", "m4a", "flac", "ogg", "opus", "aac", "wma"];
 const VIDEO_EXTS = ["mp4", "mov", "mkv", "avi", "webm", "m4v"];
-const CHIP_FORMATS = [
-  { label: "MP3", kind: "audio" },
-  { label: "M4A", kind: "audio" },
-  { label: "MP4", kind: "video" },
-  { label: "MOV", kind: "video" },
-  { label: "WAV", kind: "audio" },
-] as const;
+const FORMAT_HINT = "MP3, M4A, MP4, MOV, WAV";
 
 export function DropZone({ onFiles }: Props) {
   const [hovering, setHovering] = useState(false);
@@ -74,18 +68,7 @@ export function DropZone({ onFiles }: Props) {
   }, [onFiles]);
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={pickFiles}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          pickFiles();
-        }
-      }}
-      className={cn("hero-drop", hovering && "drag")}
-    >
+    <div className={cn("hero-drop", hovering && "drag")}>
       <div
         className="parrot-hero"
         style={{ backgroundImage: `url(${parrotImg})` }}
@@ -93,34 +76,12 @@ export function DropZone({ onFiles }: Props) {
       />
 
       <div className="hero-text">
-        <h1>Перетащите файл для транскрипции</h1>
-        <p>
-          Локальная расшифровка аудио и видео на вашем&nbsp;Mac.
-          <br />
-          Без облаков, подписок и лишней возни.
-        </p>
-        <div className="format-chips">
-          {CHIP_FORMATS.map((f) => (
-            <span key={f.label} className="chip">
-              {f.kind === "audio" ? (
-                <FileAudioIcon size={13} aria-hidden="true" />
-              ) : (
-                <FileVideoIcon size={13} aria-hidden="true" />
-              )}
-              {f.label}
-            </span>
-          ))}
-        </div>
+        <h1>Перетащите файл</h1>
+        <p>Аудио или видео — текст останется на этом&nbsp;Mac.</p>
+        <p className="format-line">{FORMAT_HINT}</p>
       </div>
 
-      <button
-        type="button"
-        className="choose-btn"
-        onClick={(e) => {
-          e.stopPropagation();
-          pickFiles();
-        }}
-      >
+      <button type="button" className="choose-btn" onClick={pickFiles}>
         <FolderOpenIcon size={17} aria-hidden="true" />
         Выбрать файл
       </button>

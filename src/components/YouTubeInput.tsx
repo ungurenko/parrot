@@ -32,15 +32,18 @@ export function YouTubeInput({ onSubmit }: Props) {
         </span>
         <input
           type="url"
+          name="youtube-url"
           placeholder="https://www.youtube.com/watch?v=..."
           spellCheck={false}
+          autoComplete="off"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
+          aria-label="Ссылка на YouTube"
           aria-describedby="youtube-validation"
         />
         <button type="submit" className="btn-primary" disabled={!validation.ok}>
           <PlayIcon size={16} aria-hidden="true" />
-          Старт
+          Расшифровать
         </button>
       </form>
       <div

@@ -436,12 +436,11 @@ function App() {
       <div
         className={`grid min-h-0 flex-1 gap-4 p-4 ${showQueue ? "queue-grid" : ""}`}
       >
-        <section className="flex min-h-0 flex-col">
+        <section className="flex min-h-0 min-w-0 flex-col">
           {view.kind === "empty" && (
             <EmptyState
               onFiles={handleFiles}
               onYouTube={handleYouTube}
-              engineLabel={engineLabel}
               historyEntries={history}
               onOpenHistory={handleOpenHistory}
               onDeleteHistory={deleteEntry}

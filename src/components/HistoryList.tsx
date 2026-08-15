@@ -2,7 +2,6 @@ import {
   FileAudioIcon,
   FileVideoIcon,
   HistoryIcon,
-  MoreHorizontalIcon,
   RefreshCwIcon,
   Trash2Icon,
 } from "lucide-react";
@@ -94,21 +93,24 @@ export function HistoryList({
 }: Props) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<HistoryFilter>("all");
+  const showSearch = entries.length >= 8;
+  const showFilters = entries.length >= 6;
 
   const filteredEntries = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = showSearch ? query.trim().toLowerCase() : "";
+    const activeFilter = showFilters ? filter : "all";
     return entries.filter((entry) => {
       const matchesQuery =
         !normalizedQuery ||
         entry.sourceName.toLowerCase().includes(normalizedQuery);
       const matchesFilter =
-        filter === "all" ||
-        (filter === "summary" && Boolean(entry.summaryPath)) ||
-        (filter === "youtube" && entry.sourceKind === "youtube") ||
-        (filter === "files" && entry.sourceKind !== "youtube");
+        activeFilter === "all" ||
+        (activeFilter === "summary" && Boolean(entry.summaryPath)) ||
+        (activeFilter === "youtube" && entry.sourceKind === "youtube") ||
+        (activeFilter === "files" && entry.sourceKind !== "youtube");
       return matchesQuery && matchesFilter;
     });
-  }, [entries, filter, query]);
+  }, [entries, filter, query, showFilters, showSearch]);
 
   const groupedEntries = useMemo(() => {
     const groups: Array<{ label: string; entries: HistoryEntry[] }> = [];
@@ -147,27 +149,32 @@ export function HistoryList({
           </button>
         )}
       </div>
-      {entries.length > 0 && (
+      {entries.length > 0 && (showSearch || showFilters) && (
         <div className="history-tools">
-          <input
-            className="history-search"
-            type="search"
-            placeholder="Найти запись"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <div className="history-filters" role="tablist" aria-label="Фильтр истории">
-            {FILTERS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={filter === item.id ? "active" : ""}
-                onClick={() => setFilter(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
+          {showSearch && (
+            <input
+              className="history-search"
+              type="search"
+              placeholder="Найти запись"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label="Найти запись"
+            />
+          )}
+          {showFilters && (
+            <div className="history-filters" role="tablist" aria-label="Фильтр истории">
+              {FILTERS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={filter === item.id ? "active" : ""}
+                  onClick={() => setFilter(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {entries.length === 0 && (
@@ -191,7 +198,7 @@ export function HistoryList({
                   type="button"
                   className="history-item-main"
                   onClick={() => onOpen(entry.id)}
-                  title="Открыть эту транскрипцию"
+                  title={entry.sourceName}
                 >
                   <span className="history-name">{entry.sourceName}</span>
                   <span className="history-meta">
@@ -213,9 +220,6 @@ export function HistoryList({
                 >
                   <RefreshCwIcon width={14} height={14} />
                 </button>
-                <span className="history-more" aria-hidden="true">
-                  <MoreHorizontalIcon width={16} height={16} />
-                </span>
                 <button
                   type="button"
                   className="history-delete"
