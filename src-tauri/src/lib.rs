@@ -53,6 +53,16 @@ impl Drop for CancelRegistryGuard {
 
 pub(crate) static PRELOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
+fn shutdown_runtime(app: &AppHandle) {
+    binaries::stop_yt_dlp_startup_cache();
+    transcriber_qwen::stop_server();
+    summarizer_qwen3::stop_server();
+    if let Some(state) = app.try_state::<AppState>() {
+        state.summary_cancel.cancel_all();
+        state.model_cancel.cancel_all();
+    }
+}
+
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Settings {
     settings::load(&app)
@@ -272,6 +282,7 @@ pub fn run() {
             }
 
             paths::cleanup_tmp(&handle);
+            summarizer_qwen3::cleanup_stale_servers(&handle);
 
             let s = settings::load(&handle);
             let _ = std::fs::create_dir_all(&s.save_dir);
@@ -279,8 +290,6 @@ pub fn run() {
             let queue = JobQueue::start(handle.clone());
             let summary_cancel = CancelRegistry::new();
             let model_cancel = CancelRegistry::new();
-            let summary_cancel_for_close = summary_cancel.clone();
-            let model_cancel_for_close = model_cancel.clone();
             app.manage(AppState {
                 queue,
                 summary_cancel,
@@ -288,16 +297,11 @@ pub fn run() {
             });
             app.manage(dictation.clone());
 
+            let close_handle = handle.clone();
             if let Some(win) = app.get_webview_window("main") {
                 win.on_window_event(move |event| {
                     if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                        binaries::stop_yt_dlp_startup_cache();
-                        transcriber_qwen::stop_server();
-                        summarizer_qwen3::stop_server();
-                        // Kill any running mlx-lm summarization subprocess so we
-                        // don't leave a zombie Python process after window close.
-                        summary_cancel_for_close.cancel_all();
-                        model_cancel_for_close.cancel_all();
+                        shutdown_runtime(&close_handle);
                     }
                 });
             }
@@ -347,8 +351,16 @@ pub fn run() {
             commands::history::clear_history,
             commands::history::load_history_entry,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                shutdown_runtime(app_handle);
+            }
+        });
 }
 
 #[cfg(test)]
