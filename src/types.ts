@@ -1,8 +1,8 @@
-export type JobStatus = "queued" | "running" | "canceling" | "canceled" | "done" | "error";
+type JobStatus = "queued" | "running" | "canceling" | "canceled" | "done" | "error";
 
 export type JobStage = "preparing" | "extracting" | "downloading" | "transcribing" | null;
 
-export type SummaryStatus = "idle" | "generating" | "done" | "error";
+type SummaryStatus = "idle" | "generating" | "done" | "error";
 export type SummaryStage = "loading" | "generating" | "finalizing";
 
 export interface Job {
@@ -28,6 +28,13 @@ export interface Job {
 
 export type Engine = "parakeet" | "whisper" | "qwen-0.6b" | "qwen-1.7b";
 export type EngineMode = "fast" | "russian" | "hardAudio" | "manyLanguages";
+export type Theme = "system" | "light" | "dark";
+
+export const THEME_LABEL: Record<Theme, string> = {
+  system: "Системная",
+  light: "Светлая",
+  dark: "Тёмная",
+};
 
 export const ENGINE_LABEL: Record<Engine, string> = {
   parakeet: "Parakeet V3",
@@ -43,11 +50,7 @@ export const ENGINE_SIZE: Record<Engine, string> = {
   "qwen-1.7b": "~3.4 ГБ",
 };
 
-export const isQwenEngine = (engine: Engine) => engine.startsWith("qwen-");
-
-export type ModelStatuses = Partial<Record<Engine, boolean>>;
-
-export interface EngineStatus {
+interface EngineStatus {
   available: boolean;
   modelReady: boolean;
   unavailableReason?: string | null;
@@ -61,6 +64,8 @@ export interface ModelProgressDetail {
   total_bytes: number;
   speed_bytes_per_sec: number;
 }
+
+export type ModelStage = "downloading" | "warmup" | "ready";
 
 export type TranscriptLanguage =
   | "auto"
@@ -95,6 +100,7 @@ export interface Settings {
   summarizer_promo_seen: boolean;
   dictation_enabled: boolean;
   dictation_hold_key: string;
+  theme: Theme;
 }
 
 export interface SummarizerStatus {
@@ -132,9 +138,6 @@ export const SUMMARY_MODEL_BADGE: Record<SummaryModel, string> = {
 };
 
 export const DEFAULT_SUMMARY_MODEL: SummaryModel = "qwen3-4b";
-
-export const selectedSummaryModelLabel = (model: SummaryModel) => SUMMARY_MODEL_LABEL[model];
-export const selectedSummaryModelSize = (model: SummaryModel) => SUMMARY_MODEL_SIZE[model];
 
 export interface HistoryEntry {
   id: string;

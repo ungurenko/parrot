@@ -8,8 +8,10 @@ use crate::{paths, summarizer_models};
 pub const DEFAULT_ENGINE: &str = "parakeet";
 pub const DEFAULT_LANGUAGE: &str = "ru";
 pub const DEFAULT_DICTATION_SHORTCUT: &str = "Alt+Space";
+pub const DEFAULT_THEME: &str = "system";
 pub const SUPPORTED_ENGINES: [&str; 4] = ["parakeet", "qwen-0.6b", "qwen-1.7b", "whisper"];
 pub const SUPPORTED_LANGUAGES: [&str; 9] = ["auto", "ru", "en", "de", "fr", "es", "it", "pt", "uk"];
+pub const SUPPORTED_THEMES: [&str; 3] = ["system", "light", "dark"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -29,6 +31,8 @@ pub struct Settings {
     pub dictation_enabled: bool,
     #[serde(default = "default_dictation_hold_key")]
     pub dictation_hold_key: String,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_engine() -> String {
@@ -51,6 +55,10 @@ fn default_dictation_hold_key() -> String {
     DEFAULT_DICTATION_SHORTCUT.to_string()
 }
 
+fn default_theme() -> String {
+    DEFAULT_THEME.to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -63,6 +71,7 @@ impl Default for Settings {
             summarizer_promo_seen: false,
             dictation_enabled: default_dictation_enabled(),
             dictation_hold_key: default_dictation_hold_key(),
+            theme: default_theme(),
         }
     }
 }
@@ -83,6 +92,9 @@ impl Settings {
         if !is_valid_dictation_shortcut(&self.dictation_hold_key) {
             self.dictation_hold_key = default_dictation_hold_key();
         }
+        if !is_supported_theme(&self.theme) {
+            self.theme = default_theme();
+        }
         self
     }
 }
@@ -93,6 +105,10 @@ pub fn is_supported_engine(engine: &str) -> bool {
 
 pub fn is_supported_language(language: &str) -> bool {
     SUPPORTED_LANGUAGES.contains(&language)
+}
+
+pub fn is_supported_theme(theme: &str) -> bool {
+    SUPPORTED_THEMES.contains(&theme)
 }
 
 pub fn validate_for_save(settings: &Settings) -> Result<()> {
@@ -113,6 +129,9 @@ pub fn validate_for_save(settings: &Settings) -> Result<()> {
     }
     if !is_valid_dictation_shortcut(&settings.dictation_hold_key) {
         anyhow::bail!("Некорректное сочетание клавиш для диктовки.");
+    }
+    if !is_supported_theme(&settings.theme) {
+        anyhow::bail!("Неизвестная тема оформления: {}", settings.theme);
     }
     Ok(())
 }
@@ -188,6 +207,7 @@ mod tests {
             summarizer_promo_seen: false,
             dictation_enabled: true,
             dictation_hold_key: "bad-key".to_string(),
+            theme: "bad-theme".to_string(),
         }
         .normalized();
 
@@ -198,7 +218,18 @@ mod tests {
             summarizer_models::DEFAULT_SUMMARY_MODEL
         );
         assert_eq!(settings.dictation_hold_key, DEFAULT_DICTATION_SHORTCUT);
+        assert_eq!(settings.theme, DEFAULT_THEME);
         assert!(!settings.save_dir.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn validate_for_save_should_reject_unknown_theme() {
+        let settings = Settings {
+            theme: "bad-theme".to_string(),
+            ..Settings::default()
+        };
+
+        assert!(validate_for_save(&settings).is_err());
     }
 
     #[test]

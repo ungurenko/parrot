@@ -27,6 +27,7 @@ import {
   type Engine,
   type EngineStatuses,
   type ModelProgressDetail,
+  type ModelStage,
   type Settings,
 } from "../types";
 import { EnginePicker } from "./EnginePicker";
@@ -36,7 +37,6 @@ interface Props {
 }
 
 type Step = "setup" | "downloading" | "ready";
-type ModelStage = "downloading" | "warmup" | "ready";
 
 export function Onboarding({ onDone }: Props) {
   const [step, setStep] = useState<Step>("setup");
@@ -272,7 +272,7 @@ export function Onboarding({ onDone }: Props) {
           )}
         </CardContent>
 
-        <CardFooter className="justify-end gap-2 rounded-b-[inherit] bg-white/55 px-6 py-4">
+        <CardFooter className="justify-end gap-2 rounded-b-[inherit] bg-surface-2 px-6 py-4">
           {step === "setup" && settings && (
             <Button
               onClick={prepareOrFinish}

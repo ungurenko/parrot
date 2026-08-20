@@ -27,12 +27,15 @@ import {
   SUMMARY_MODEL_BADGE,
   SUMMARY_MODEL_LABEL,
   SUMMARY_MODEL_SIZE,
+  THEME_LABEL,
   type Engine,
   type EngineStatuses,
   type ModelProgressDetail,
+  type ModelStage,
   type Settings,
   type SummaryModel,
   type SummarizerStatus,
+  type Theme,
   type TranscriptLanguage,
 } from "../types";
 import { EnginePicker } from "./EnginePicker";
@@ -51,8 +54,11 @@ import {
   DownloadIcon,
   FileTextIcon,
   KeyboardIcon,
+  MonitorIcon,
+  MoonIcon,
   RefreshCwIcon,
   SettingsIcon,
+  SunIcon,
   Trash2Icon,
   type LucideIcon,
 } from "lucide-react";
@@ -97,6 +103,7 @@ const PREVIEW_SETTINGS: Settings = {
   summarizer_promo_seen: true,
   dictation_enabled: true,
   dictation_hold_key: "Alt+Space",
+  theme: "system",
 };
 
 const PREVIEW_ENGINE_STATUSES: EngineStatuses = {
@@ -159,9 +166,8 @@ interface ModelSettingsSectionProps {
   deletingEngine: Engine | null;
   modelProgress: number;
   modelProgressDetail: ModelProgressDetail | null;
-  modelStage: "downloading" | "warmup" | "ready";
+  modelStage: ModelStage;
   hasActiveJob: boolean;
-  modelError: string | null;
   onEngineChange: (engine: Engine) => void;
   onPrepareModel: (engine: Engine) => void;
   onDeleteModel: (engine: Engine) => void;
@@ -176,7 +182,6 @@ function ModelSettingsSection({
   modelProgressDetail,
   modelStage,
   hasActiveJob,
-  modelError,
   onEngineChange,
   onPrepareModel,
   onDeleteModel,
@@ -200,13 +205,6 @@ function ModelSettingsSection({
         />
       </Field>
 
-      {modelError && (
-        <Alert variant="destructive">
-          <AlertDescription className="whitespace-pre-wrap break-words">
-            {modelError}
-          </AlertDescription>
-        </Alert>
-      )}
     </>
   );
 }
@@ -405,6 +403,50 @@ function DictationSettingsSection({
   );
 }
 
+interface AppearanceSectionProps {
+  theme: Theme;
+  onThemeChange: (theme: Theme) => void;
+}
+
+const THEME_OPTIONS: Array<{
+  id: Theme;
+  label: string;
+  Icon: LucideIcon;
+}> = [
+  { id: "system", label: THEME_LABEL.system, Icon: MonitorIcon },
+  { id: "light", label: THEME_LABEL.light, Icon: SunIcon },
+  { id: "dark", label: THEME_LABEL.dark, Icon: MoonIcon },
+];
+
+function AppearanceSection({ theme, onThemeChange }: AppearanceSectionProps) {
+  return (
+    <Field className="min-w-0">
+      <FieldLabel>Оформление</FieldLabel>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {THEME_OPTIONS.map(({ Icon, ...opt }) => {
+          const selected = theme === opt.id;
+          return (
+            <button
+              key={opt.id}
+              type="button"
+              className={cn(
+                "engine-card min-w-0 text-left",
+                selected && "selected",
+              )}
+              onClick={() => onThemeChange(opt.id)}
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span className="font-medium leading-snug">{opt.label}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </Field>
+  );
+}
+
 interface SaveFolderSectionProps {
   saveDir: string;
   onPickFolder: () => void;
@@ -474,7 +516,7 @@ interface SummarySettingsSectionProps {
   busy: boolean;
   deleting: boolean;
   progress: number;
-  stage: "downloading" | "warmup" | "ready";
+  stage: ModelStage;
   envSetupBusy: boolean;
   envSetupStatus: string | null;
   onToggle: (enabled: boolean) => void;
@@ -659,7 +701,7 @@ interface SettingsFooterProps {
 function SettingsFooter({ appVersion }: SettingsFooterProps) {
   return (
     <>
-      <Separator className="bg-white/50" />
+      <Separator className="bg-hairline" />
 
       <div className="modal-band-bottom flex min-w-0 shrink-0 items-center justify-between gap-4 p-4">
         <div className="min-w-0 text-left text-xs text-muted-foreground">
@@ -724,21 +766,17 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const [modelStatuses, setModelStatuses] = useState<EngineStatuses>({});
   const [busyEngine, setBusyEngine] = useState<Engine | null>(null);
   const [deletingEngine, setDeletingEngine] = useState<Engine | null>(null);
-  const [modelError, setModelError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [modelProgress, setModelProgress] = useState(0);
   const [modelProgressDetail, setModelProgressDetail] =
     useState<ModelProgressDetail | null>(null);
-  const [modelStage, setModelStage] = useState<"downloading" | "warmup" | "ready">(
-    "downloading",
-  );
+  const [modelStage, setModelStage] = useState<ModelStage>("downloading");
   const [summarizerStatus, setSummarizerStatus] =
     useState<SummarizerStatus | null>(null);
   const [summaryBusy, setSummaryBusy] = useState(false);
   const [summaryDeleting, setSummaryDeleting] = useState(false);
   const [summaryProgress, setSummaryProgress] = useState(0);
-  const [summaryStage, setSummaryStage] = useState<
-    "downloading" | "warmup" | "ready"
-  >("downloading");
+  const [summaryStage, setSummaryStage] = useState<ModelStage>("downloading");
   const [envSetupBusy, setEnvSetupBusy] = useState(false);
   const [envSetupStatus, setEnvSetupStatus] = useState<string | null>(null);
   const [capturingShortcut, setCapturingShortcut] = useState(false);
@@ -790,13 +828,13 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       listenInTauri<ModelProgressDetail>("model:progress_detail", (e) => {
         setModelProgressDetail(e.payload);
       }),
-      listenInTauri<"downloading" | "warmup" | "ready">("model:stage", (e) =>
+      listenInTauri<ModelStage>("model:stage", (e) =>
         setModelStage(e.payload),
       ),
       listenInTauri<number>("summary_model:progress", (e) => {
         setSummaryProgress(e.payload);
       }),
-      listenInTauri<"downloading" | "warmup" | "ready">(
+      listenInTauri<ModelStage>(
         "summary_model:stage",
         (e) => setSummaryStage(e.payload),
       ),
@@ -809,59 +847,51 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
     };
   }, []);
 
+  const saveSettings = async (next: Settings): Promise<boolean> => {
+    if (previewMode) {
+      setSettings(next);
+      setSettingsError(null);
+      return true;
+    }
+    try {
+      await invoke("set_settings", { new: next });
+      setSettings(next);
+      setSettingsError(null);
+      return true;
+    } catch (e: unknown) {
+      setSettingsError(formatErrorDescription(e));
+      return false;
+    }
+  };
+
   const pickFolder = async () => {
     if (previewMode) return;
     const result = await open({ directory: true, multiple: false });
     if (!result || !settings) return;
     const next = { ...settings, save_dir: result as string };
-    try {
-      await invoke("set_settings", { new: next });
-      setSettings(next);
-      setModelError(null);
-      toast.success("Сохранено");
-    } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
-    }
+    if (await saveSettings(next)) toast.success("Сохранено");
   };
 
   const changeEngine = async (engine: Engine) => {
     if (!settings) return;
     if (engine !== settings.engine && hasActiveJob) {
-      setModelError(ACTIVE_JOB_HINT);
+      setSettingsError(ACTIVE_JOB_HINT);
       return;
     }
     const next = { ...settings, engine };
-    if (previewMode) {
-      setSettings(next);
-      setModelError(null);
-      return;
-    }
-    try {
-      await invoke("set_settings", { new: next });
-      setSettings(next);
-      setModelError(null);
-      toast.success("Сохранено");
-    } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
-    }
+    if (await saveSettings(next)) toast.success("Сохранено");
   };
 
   const changeLanguage = async (language: TranscriptLanguage) => {
     if (!settings) return;
     const next = { ...settings, language };
-    if (previewMode) {
-      setSettings(next);
-      setModelError(null);
-      return;
-    }
-    try {
-      await invoke("set_settings", { new: next });
-      setSettings(next);
-      setModelError(null);
-      toast.success("Сохранено");
-    } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
-    }
+    if (await saveSettings(next)) toast.success("Сохранено");
+  };
+
+  const changeTheme = async (theme: Theme) => {
+    if (!settings || theme === settings.theme) return;
+    const next = { ...settings, theme };
+    await saveSettings(next);
   };
 
   const prepareModel = async (engine: Engine) => {
@@ -873,7 +903,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       return;
     }
     setBusyEngine(engine);
-    setModelError(null);
+    setSettingsError(null);
     setModelProgress(1);
     setModelProgressDetail(null);
     setModelStage("downloading");
@@ -882,7 +912,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setModelProgress(100);
       await refreshModelStatuses();
     } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
+      setSettingsError(formatErrorDescription(e));
     } finally {
       setBusyEngine(null);
     }
@@ -891,7 +921,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const deleteModel = async (engine: Engine) => {
     if (!modelStatuses[engine]?.modelReady) return;
     if (hasActiveJob) {
-      setModelError(ACTIVE_JOB_DELETE_HINT);
+      setSettingsError(ACTIVE_JOB_DELETE_HINT);
       return;
     }
     const ok = window.confirm(
@@ -908,7 +938,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
     }
 
     setDeletingEngine(engine);
-    setModelError(null);
+    setSettingsError(null);
     try {
       await invoke("delete_model_for_engine", { engine });
       await refreshModelStatuses();
@@ -916,7 +946,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       setModelProgressDetail(null);
       toast.success("Модель удалена");
     } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
+      setSettingsError(formatErrorDescription(e));
       await refreshModelStatuses();
     } finally {
       setDeletingEngine(null);
@@ -926,38 +956,24 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const toggleSummarizer = async (enabled: boolean) => {
     if (!settings) return;
     const next = { ...settings, summarizer_enabled: enabled };
-    if (previewMode) {
-      setSettings(next);
-      setModelError(null);
-      return;
-    }
-    try {
-      await invoke("set_settings", { new: next });
-      setSettings(next);
-      setModelError(null);
-    } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
-    }
+    await saveSettings(next);
   };
 
   const changeSummaryModel = async (summary_model: SummaryModel) => {
     if (!settings || summary_model === settings.summary_model) return;
     const next = { ...settings, summary_model };
     if (previewMode) {
-      setSettings(next);
+      await saveSettings(next);
       setSummarizerStatus({ available: true, modelReady: false });
       setSummaryProgress(0);
       return;
     }
     setSummaryBusy(true);
-    setModelError(null);
+    setSettingsError(null);
     try {
-      await invoke("set_settings", { new: next });
-      setSettings(next);
+      if (!(await saveSettings(next))) return;
       setSummarizerStatus(await invoke<SummarizerStatus>("get_summarizer_status"));
       setSummaryProgress(0);
-    } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
     } finally {
       setSummaryBusy(false);
     }
@@ -966,18 +982,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const toggleDictation = async (enabled: boolean) => {
     if (!settings) return;
     const next = { ...settings, dictation_enabled: enabled };
-    if (previewMode) {
-      setSettings(next);
-      setModelError(null);
-      return;
-    }
-    try {
-      await invoke("set_settings", { new: next });
-      setSettings(next);
-      setModelError(null);
-    } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
-    }
+    await saveSettings(next);
   };
 
   const changeDictationShortcut = async (shortcut: string) => {
@@ -987,24 +992,12 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       dictation_enabled: true,
       dictation_hold_key: shortcut,
     };
-    if (previewMode) {
-      setSettings(next);
-      setModelError(null);
+    if (await saveSettings(next)) {
       setShortcutHint(`Сочетание сохранено: ${displayShortcut(shortcut)}`);
-      setCapturingShortcut(false);
-      return;
-    }
-    try {
-      await invoke("set_settings", { new: next });
-      setSettings(next);
-      setModelError(null);
-      setShortcutHint(`Сочетание сохранено: ${displayShortcut(shortcut)}`);
-    } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
+    } else {
       setShortcutHint(null);
-    } finally {
-      setCapturingShortcut(false);
     }
+    setCapturingShortcut(false);
   };
 
   const captureDictationShortcut = (
@@ -1061,7 +1054,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
     try {
       await openUrl(ACCESSIBILITY_SETTINGS_URL);
     } catch (e: unknown) {
-      setModelError(
+      setSettingsError(
         `Не удалось открыть настройки macOS автоматически.\nОткройте вручную: Системные настройки → Конфиденциальность и безопасность → Универсальный доступ.\n${formatErrorDescription(e)}`,
       );
     }
@@ -1105,14 +1098,14 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       return;
     }
     setEnvSetupBusy(true);
-    setModelError(null);
+    setSettingsError(null);
     setEnvSetupStatus("Подготовка…");
     try {
       await invoke("setup_summarizer_env");
       setEnvSetupStatus(null);
       await refreshSummarizerStatus();
     } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
+      setSettingsError(formatErrorDescription(e));
       setEnvSetupStatus(null);
     } finally {
       setEnvSetupBusy(false);
@@ -1126,7 +1119,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       return;
     }
     setSummaryBusy(true);
-    setModelError(null);
+    setSettingsError(null);
     setSummaryProgress(1);
     setSummaryStage("downloading");
     try {
@@ -1135,15 +1128,10 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       await refreshSummarizerStatus();
       if (settings && !settings.summarizer_promo_seen) {
         const next = { ...settings, summarizer_promo_seen: true };
-        try {
-          await invoke("set_settings", { new: next });
-          setSettings(next);
-        } catch (e) {
-          console.error("set_settings (promo_seen) failed:", e);
-        }
+        await saveSettings(next);
       }
     } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
+      setSettingsError(formatErrorDescription(e));
     } finally {
       setSummaryBusy(false);
     }
@@ -1162,13 +1150,13 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
       return;
     }
     setSummaryDeleting(true);
-    setModelError(null);
+    setSettingsError(null);
     try {
       await invoke("delete_summarizer_model");
       await refreshSummarizerStatus();
       setSummaryProgress(0);
     } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
+      setSettingsError(formatErrorDescription(e));
     } finally {
       setSummaryDeleting(false);
     }
@@ -1201,12 +1189,24 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
           <SettingsTabs active={activeTab} onChange={setActiveTab} />
 
           <FieldGroup className="settings-content min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+            {settingsError && (
+              <Alert variant="destructive">
+                <AlertDescription className="whitespace-pre-wrap break-words">
+                  {settingsError}
+                </AlertDescription>
+              </Alert>
+            )}
+
             {activeTab === "basic" && (
               <>
                 <SaveFolderSection saveDir={settings.save_dir} onPickFolder={pickFolder} />
                 <LanguageSettingsSection
                   language={settings.language}
                   onLanguageChange={changeLanguage}
+                />
+                <AppearanceSection
+                  theme={settings.theme}
+                  onThemeChange={changeTheme}
                 />
               </>
             )}
@@ -1221,7 +1221,6 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
                 modelProgressDetail={modelProgressDetail}
                 modelStage={modelStage}
                 hasActiveJob={hasActiveJob}
-                modelError={modelError}
                 onEngineChange={changeEngine}
                 onPrepareModel={prepareModel}
                 onDeleteModel={deleteModel}

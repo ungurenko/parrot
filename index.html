@@ -5,6 +5,22 @@
     <link rel="icon" type="image/png" href="/parrot.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Parrot</title>
+    <script>
+      // Prevent a flash of the wrong theme by applying the saved/resolved
+      // theme before React mounts. Mirrored in localStorage by useTheme.
+      (function () {
+        try {
+          var stored = localStorage.getItem("parrot-theme");
+          var dark =
+            stored === "dark" ||
+            ((!stored || stored === "system") &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {
+          /* ignore */
+        }
+      })();
+    </script>
   </head>
 
   <body>

@@ -14,6 +14,7 @@ import {
   type Engine,
   type EngineStatuses,
   type ModelProgressDetail,
+  type ModelStage,
 } from "../types";
 
 interface Props {
@@ -23,7 +24,7 @@ interface Props {
   deletingEngine?: Engine | null;
   progress?: number;
   progressDetail?: ModelProgressDetail | null;
-  stage?: "downloading" | "warmup" | "ready";
+  stage?: ModelStage;
   hasActiveJob?: boolean;
   onChange: (engine: Engine) => void;
   onPrepare?: (engine: Engine) => void;
@@ -37,7 +38,7 @@ const ACTIVE_JOB_DELETE_HINT =
 
 const progressText = (
   progress: number,
-  stage: "downloading" | "warmup" | "ready",
+  stage: ModelStage,
 ) => {
   return modelProgressMessage({ stage, percent: progress }).title;
 };
@@ -108,7 +109,7 @@ export function EnginePicker({
                     "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border text-xs",
                     active
                       ? "border-primary bg-primary text-primary-foreground"
-                      : "border-white/70 bg-white/46 text-muted-foreground",
+                      : "border-hairline-strong bg-surface-2 text-muted-foreground",
                   )}
                   aria-hidden="true"
                 >

@@ -14,6 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { jobsReducer, useJobEvents } from "./hooks/useJobEvents";
 import { useHistory } from "./hooks/useHistory";
 import { useAutoUpdate } from "./hooks/useAutoUpdate";
+import { useTheme } from "./hooks/useTheme";
 import { UpdateBanner } from "./components/UpdateBanner";
 import {
   cleanupTauriListeners,
@@ -46,6 +47,7 @@ const BROWSER_PREVIEW_SETTINGS: Settings = {
   summarizer_promo_seen: true,
   dictation_enabled: true,
   dictation_hold_key: "Alt+Space",
+  theme: "system",
 };
 
 function pickView(jobs: Job[], selectedId: string | null): ViewState {
@@ -119,6 +121,7 @@ function App() {
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const { history, deleteEntry, clearAll, loadEntry } = useHistory();
   const updater = useAutoUpdate();
+  const resolvedTheme = useTheme(settings?.theme);
 
   const reloadSettings = useCallback(async () => {
     const s = await invoke<Settings>("get_settings");
@@ -196,8 +199,17 @@ function App() {
     useCallback((id: string) => setSelectedId(id), []),
   );
 
-  const markCanceling = useCallback((id: string) => {
+  const cancelJob = useCallback(async (id: string) => {
     dispatchJobs({ type: "jobCanceling", id });
+    try {
+      await invoke("cancel_job", { id });
+    } catch (error) {
+      console.error("cancel_job failed:", error);
+      const friendly = userErrorFrom(error);
+      toast.error(friendly.title, {
+        description: formatErrorDescription(error),
+      });
+    }
   }, []);
 
   const handleFiles = useCallback(async (paths: string[]) => {
@@ -313,7 +325,7 @@ function App() {
     return (
       <>
         <Onboarding onDone={() => setNeedsOnboarding(false)} />
-        <Toaster richColors position="bottom-right" />
+        <Toaster theme={resolvedTheme} richColors position="bottom-right" />
       </>
     );
   }
@@ -452,7 +464,7 @@ function App() {
             />
           )}
           {view.kind === "processing" && (
-            <ProcessingView job={view.job} onCancel={markCanceling} />
+            <ProcessingView job={view.job} onCancel={cancelJob} />
           )}
           {view.kind === "result" && settings && (
             <ResultView
@@ -473,7 +485,7 @@ function App() {
               <JobList
                 jobs={jobs}
                 onSelect={(j) => setSelectedId(j.id)}
-                onCancel={markCanceling}
+                onCancel={cancelJob}
                 selectedId={selectedId}
               />
             </ScrollArea>
@@ -493,7 +505,7 @@ function App() {
           }}
         />
       )}
-      <Toaster richColors position="bottom-right" />
+      <Toaster theme={resolvedTheme} richColors position="bottom-right" />
     </main>
   );
 }
