@@ -303,7 +303,7 @@ body {
   }
 
   /* Icon button (toolbar) */
-  .icon-btn:hover { background: rgba(255,255,255,0.85); color: var(--ink); }
+  .icon-btn:hover { background: var(--surface-glass-hover); color: var(--ink); }
   .icon-btn:active { transform: translateY(1px); }
   .icon-btn-sm { width: 26px; height: 26px; }
   @media (max-width: 640px) {
@@ -2436,7 +2436,7 @@ body {
     border-color: var(--hairline-strong);
   }
   .segments-collapsed::after {
-    background: linear-gradient(to bottom, color-mix(in srgb, var(--surface) 0%, transparent) 0%, var(--surface) 100%);
+    background: linear-gradient(to bottom, transparent 0%, var(--surface) 100%);
   }
   .result-action-bar {
     box-shadow: var(--shadow-panel-sm);
