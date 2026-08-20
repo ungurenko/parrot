@@ -16,8 +16,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-use crate::cancellation::CancelToken;
-use crate::{paths, queue, settings, source, transcriber, transcriber_parakeet, transcriber_qwen};
+use crate::{paths, queue, settings, source};
 
 const MAX_RECORD_SECONDS: u32 = 10 * 60;
 const MIN_RECORD_SAMPLES: usize = 1_600;
@@ -592,25 +591,14 @@ async fn transcribe_dictation_wav(app: &AppHandle, wav_path: &Path) -> Result<St
     let language = settings.language;
     tokio::task::spawn_blocking(move || -> Result<String> {
         let progress = |_p: u32| {};
-        match engine.as_str() {
-            "parakeet" => {
-                let dir = paths::parakeet_dir(&app_for_task)?;
-                transcriber_parakeet::transcribe_wav(&dir, &wav_for_task, progress)
-            }
-            "whisper" => {
-                let model = paths::model_path(&app_for_task)?;
-                transcriber::transcribe_wav(&model, &wav_for_task, &language, progress)
-            }
-            engine if transcriber_qwen::is_qwen_engine(engine) => transcriber_qwen::transcribe_wav(
-                &app_for_task,
-                &wav_for_task,
-                engine,
-                &language,
-                None::<Arc<CancelToken>>,
-                progress,
-            ),
-            other => anyhow::bail!("Неизвестный движок транскрибации: {other}"),
-        }
+        queue::transcribe_wav_for_engine(
+            &app_for_task,
+            &wav_for_task,
+            &engine,
+            &language,
+            None,
+            progress,
+        )
     })
     .await?
 }

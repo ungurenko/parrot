@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import parrotImg from "/parrot.png";
 import { processingProgressMessage } from "@/lib/progressEstimate";
 import type { Job } from "../types";
@@ -236,10 +235,7 @@ export function ProcessingView({ job, onCancel }: Props) {
         type="button"
         className="ghost-btn self-start"
         disabled={job.status === "canceling"}
-        onClick={() => {
-          onCancel(job.id);
-          invoke("cancel_job", { id: job.id }).catch(() => {});
-        }}
+        onClick={() => onCancel(job.id)}
       >
         <svg
           width="12"

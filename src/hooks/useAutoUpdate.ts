@@ -8,14 +8,15 @@ import { formatErrorDescription, userErrorFrom } from "@/lib/userErrors";
 const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CURRENT_STATUS_TIMEOUT_MS = 3000;
 
-export type AutoUpdateStatus =
+type AutoUpdateStatus =
   | "idle"
   | "checking"
   | "current"
   | "installing"
   | "error";
 
-export type AutoUpdateScope = "check" | "install";
+type AutoUpdateScope = "check" | "install";
+type UpdateOperation = "idle" | "checking" | "installing";
 
 export interface AutoUpdate {
   available: Update | null;
@@ -62,7 +63,7 @@ export function useAutoUpdate(): AutoUpdate {
   const [errorScope, setErrorScope] = useState<AutoUpdateScope | null>(null);
 
   const currentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inFlightRef = useRef(false);
+  const operationRef = useRef<UpdateOperation>("idle");
 
   const clearErrors = useCallback(() => {
     setErrorDetails(null);
@@ -89,9 +90,8 @@ export function useAutoUpdate(): AutoUpdate {
         if (manual) setStatus("current");
         return;
       }
-      if (inFlightRef.current) return;
-      if (status === "installing") return;
-      inFlightRef.current = true;
+      if (operationRef.current !== "idle") return;
+      operationRef.current = "checking";
 
       if (manual) {
         clearErrors();
@@ -125,15 +125,16 @@ export function useAutoUpdate(): AutoUpdate {
         if (manual) setStatus("error");
         else setStatus("idle");
       } finally {
-        inFlightRef.current = false;
+        operationRef.current = "idle";
       }
     },
-    [status, clearErrors, reportError],
+    [clearErrors, reportError],
   );
 
   const install = useCallback(async () => {
     if (!isTauriRuntime()) return;
-    if (status === "installing") return;
+    if (operationRef.current !== "idle") return;
+    operationRef.current = "installing";
     try {
       setStatus("installing");
       setProgress(0);
@@ -167,8 +168,10 @@ export function useAutoUpdate(): AutoUpdate {
       console.error("Auto-update install failed:", error);
       reportError("install", error);
       setStatus("error");
+    } finally {
+      operationRef.current = "idle";
     }
-  }, [status, available, clearErrors, reportError]);
+  }, [available, clearErrors, reportError]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -181,11 +184,7 @@ export function useAutoUpdate(): AutoUpdate {
       clearInterval(handle);
       if (currentTimerRef.current) clearTimeout(currentTimerRef.current);
     };
-    // Запускаем один раз при монтировании App. runCheck содержит замыкание
-    // над актуальным state через функциональные setState, повторный запуск
-    // цикла на изменение зависимостей нежелателен.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [runCheck]);
 
   return {
     available,

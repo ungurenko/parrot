@@ -66,5 +66,5 @@ export function useHistory() {
     [],
   );
 
-  return { history, reload, deleteEntry, clearAll, loadEntry };
+  return { history, deleteEntry, clearAll, loadEntry };
 }

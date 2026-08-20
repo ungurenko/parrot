@@ -4,6 +4,7 @@ mod commands;
 mod dictation;
 mod fs_metrics;
 mod history;
+mod mlx_env;
 mod model;
 mod paths;
 mod prompts;
@@ -334,7 +335,6 @@ pub fn run() {
             commands::models::get_engine_statuses,
             commands::models::download_model,
             commands::models::download_model_for_engine,
-            commands::models::delete_model,
             commands::models::delete_model_for_engine,
             commands::jobs::cancel_job,
             commands::system::open_in_finder,

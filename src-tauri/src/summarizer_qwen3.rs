@@ -1,19 +1,16 @@
 use anyhow::{anyhow, Context, Result};
-use flate2::read::GzDecoder;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::env;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{self, BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tar::Archive;
 use tauri::AppHandle;
 
 #[cfg(unix)]
@@ -22,19 +19,9 @@ use std::os::fd::AsRawFd;
 use crate::cancellation::CancelToken;
 use crate::fs_metrics::dir_size_bytes;
 use crate::prompts;
-use crate::{paths, settings, summarizer_models};
+use crate::{mlx_env, paths, settings, summarizer_models};
 use summarizer_models::{SummaryModelSpec, SummaryRuntime};
 
-// Pinned standalone Python release from astral-sh/python-build-standalone.
-// To update: pick newer tag at https://github.com/astral-sh/python-build-standalone/releases,
-// fetch matching SHA256 from SHA256SUMS in that release, replace both constants.
-// Tarball expands to a top-level `python/` directory (~17.8 MB compressed, ~60 MB unpacked).
-const STANDALONE_PYTHON_URL: &str = "https://github.com/astral-sh/python-build-standalone/releases/download/20260414/cpython-3.12.13+20260414-aarch64-apple-darwin-install_only.tar.gz";
-const STANDALONE_PYTHON_SHA256: &str =
-    "8966b2bcd9fa03ba22c080ad15a86bc12e41a00122b16f4b3740e302261124d9";
-const STANDALONE_PYTHON_BYTES: u64 = 17_836_558;
-const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const SERVER_HOST: &str = "127.0.0.1";
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(90);
 const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
@@ -50,6 +37,7 @@ const LEGACY_QWEN_READY_MARKER: &str = ".parrot-ready-summary";
 const SUMMARY_MAX_TOKENS: u32 = 4096;
 const SUMMARY_TEMP: f32 = 0.3;
 const SUMMARY_TOP_P: f32 = 0.9;
+const SUMMARY_MLX_PACKAGES: [&str; 3] = ["mlx==0.31.1", "mlx-lm==0.31.2", "mlx-vlm==0.4.3"];
 
 static SUMMARY_SERVER: Lazy<Mutex<Option<SummaryServer>>> = Lazy::new(|| Mutex::new(None));
 static SERVER_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = Lazy::new(|| {
@@ -1575,179 +1563,11 @@ fn candidate_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// Download + verify + extract astral-sh/python-build-standalone if not yet
-/// installed. Returns path to the extracted `bin/python3.12`. Idempotent.
-fn ensure_standalone_python<F: Fn(&str) + Send + Sync>(
-    app: &AppHandle,
-    on_progress: &F,
-) -> Result<PathBuf> {
-    let python_dir = paths::qwen_python_dir(app)?;
-    let python_bin = python_dir.join("bin/python3.12");
-
-    if python_bin.exists() {
-        return Ok(python_bin);
-    }
-
-    let parent = python_dir
-        .parent()
-        .ok_or_else(|| anyhow!("Невалидный путь для Python"))?;
-    std::fs::create_dir_all(parent).context("Не удалось создать каталог .qwen-mlx")?;
-
-    // Download to a temp file inside the same parent (atomic-ish: same FS,
-    // we move/rename only after verification + extraction succeed).
-    let tarball_path = parent.join("python-download.tar.gz");
-    on_progress(&format!(
-        "Скачиваю Python 3.12 (~{} МБ)…",
-        STANDALONE_PYTHON_BYTES / 1_048_576
-    ));
-
-    download_with_progress(STANDALONE_PYTHON_URL, &tarball_path, on_progress)
-        .context("Не удалось скачать Python")?;
-
-    on_progress("Проверяю SHA256…");
-    let actual_sha = sha256_file(&tarball_path).context("Не удалось посчитать SHA256")?;
-    if !actual_sha.eq_ignore_ascii_case(STANDALONE_PYTHON_SHA256) {
-        let _ = std::fs::remove_file(&tarball_path);
-        return Err(anyhow!(
-            "SHA256 скачанного Python не совпадает (ожидалось {}, получено {}). \
-             Возможно, файл повреждён — попробуйте ещё раз.",
-            STANDALONE_PYTHON_SHA256,
-            actual_sha
-        ));
-    }
-
-    on_progress("Распаковываю Python…");
-    extract_tar_gz(&tarball_path, parent).context("Не удалось распаковать Python")?;
-    let _ = std::fs::remove_file(&tarball_path);
-
-    if !python_bin.exists() {
-        return Err(anyhow!(
-            "Python распакован, но {} не найден. Архив повреждён или формат изменился.",
-            python_bin.display()
-        ));
-    }
-
-    // Strip macOS quarantine xattr so the freshly extracted binaries can run
-    // without Gatekeeper prompts. Best-effort; ignore failures.
-    let _ = Command::new("xattr")
-        .args(["-dr", "com.apple.quarantine"])
-        .arg(&python_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    Ok(python_bin)
-}
-
-fn download_with_progress<F: Fn(&str) + Send + Sync>(
-    url: &str,
-    dest: &Path,
-    on_progress: &F,
-) -> Result<()> {
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(DOWNLOAD_CONNECT_TIMEOUT)
-        .timeout(DOWNLOAD_TOTAL_TIMEOUT)
-        .build()?;
-    let mut response = client
-        .get(url)
-        .send()
-        .with_context(|| format!("HTTP GET failed: {url}"))?
-        .error_for_status()?;
-    let total = response.content_length().unwrap_or(STANDALONE_PYTHON_BYTES);
-    let mut file = File::create(dest)
-        .with_context(|| format!("Не удалось создать файл {}", dest.display()))?;
-    let mut downloaded: u64 = 0;
-    let mut buf = [0u8; 65_536];
-    let mut last_pct: i32 = -1;
-    loop {
-        let n = response.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        file.write_all(&buf[..n])?;
-        downloaded += n as u64;
-        let pct = ((downloaded as f64 / total as f64) * 100.0) as i32;
-        if pct != last_pct && pct % 5 == 0 {
-            on_progress(&format!(
-                "Скачиваю Python: {} / {} МБ",
-                downloaded / 1_048_576,
-                total / 1_048_576
-            ));
-            last_pct = pct;
-        }
-    }
-    file.flush()?;
-    Ok(())
-}
-
-fn sha256_file(path: &Path) -> Result<String> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 65_536];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
-fn extract_tar_gz(archive: &Path, dest_parent: &Path) -> Result<()> {
-    let file = File::open(archive)?;
-    let gz = GzDecoder::new(file);
-    let mut tar = Archive::new(gz);
-    tar.set_preserve_permissions(true);
-    tar.unpack(dest_parent)?;
-    Ok(())
-}
-
-/// Download standalone Python and create the user-space venv if needed.
-/// Returns the venv `bin/python`. Idempotent.
-pub(crate) fn ensure_user_python_venv<F: Fn(&str) + Send + Sync>(
-    app: &AppHandle,
-    on_progress: F,
-) -> Result<PathBuf> {
-    let python_bin = ensure_standalone_python(app, &on_progress)?;
-    let env_dir = paths::qwen_env_dir(app)?;
-    let venv_python = env_dir.join("bin/python");
-
-    if let Some(parent) = env_dir.parent() {
-        std::fs::create_dir_all(parent).context("Не удалось создать каталог окружения")?;
-    }
-
-    if !venv_python.exists() {
-        on_progress("Создаю Python venv…");
-        let out = Command::new(&python_bin)
-            .arg("-m")
-            .arg("venv")
-            .arg(&env_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .context("Не удалось запустить python -m venv")?;
-        if !out.status.success() {
-            return Err(command_error(
-                "Не удалось создать venv",
-                &out.stderr,
-                out.status.code(),
-            ));
-        }
-    } else {
-        on_progress("Использую существующий venv");
-    }
-
-    Ok(venv_python)
-}
-
 /// Bootstrap the user-space MLX venv: ensure Python is downloaded, create
 /// the venv, upgrade pip, install MLX runtimes. Idempotent — if everything is
 /// already present, returns quickly. Streams progress lines via `on_progress`.
 pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -> Result<()> {
-    let venv_python = ensure_user_python_venv(app, &on_progress)?;
+    let venv_python = mlx_env::ensure_user_python_venv(app, &on_progress)?;
 
     // Step 2 — upgrade pip (best-effort; skip failure to keep going).
     on_progress("Обновляю pip…");
@@ -1761,16 +1581,8 @@ pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -
     // Step 3 — install MLX runtimes for Qwen and Gemma summaries.
     on_progress("Устанавливаю MLX для Qwen и Gemma…");
     let out = Command::new(&venv_python)
-        .args([
-            "-m",
-            "pip",
-            "install",
-            "--disable-pip-version-check",
-            "mlx==0.31.1",
-            "mlx-lm==0.31.2",
-            "mlx-vlm==0.4.3",
-            "parakeet-mlx==0.5.2",
-        ])
+        .args(["-m", "pip", "install", "--disable-pip-version-check"])
+        .args(SUMMARY_MLX_PACKAGES)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1848,6 +1660,15 @@ fn command_error(prefix: &str, stderr: &[u8], code: Option<i32>) -> anyhow::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_environment_installs_only_summary_runtimes() {
+        assert!(SUMMARY_MLX_PACKAGES.contains(&"mlx-lm==0.31.2"));
+        assert!(SUMMARY_MLX_PACKAGES.contains(&"mlx-vlm==0.4.3"));
+        assert!(!SUMMARY_MLX_PACKAGES
+            .iter()
+            .any(|package| package.starts_with("parakeet-mlx")));
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

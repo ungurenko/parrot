@@ -3,7 +3,6 @@ import {
   ENGINE_SIZE,
   type Engine,
   type EngineMode,
-  type EngineStatuses,
 } from "../types";
 
 export interface EngineModeOption {
@@ -60,14 +59,6 @@ export const ENGINE_MODES: EngineModeOption[] = [
   },
 ];
 
-export function engineForMode(mode: EngineMode): Engine {
-  return ENGINE_MODES.find((option) => option.id === mode)?.engine ?? "parakeet";
-}
-
-export function modeForEngine(engine: Engine): EngineMode {
-  return ENGINE_MODES.find((option) => option.engine === engine)?.id ?? "fast";
-}
-
 export function modeOptionForEngine(engine: Engine): EngineModeOption {
   return ENGINE_MODES.find((option) => option.engine === engine) ?? ENGINE_MODES[0];
 }
@@ -75,11 +66,4 @@ export function modeOptionForEngine(engine: Engine): EngineModeOption {
 export function readableEngineName(engine: Engine): string {
   const option = modeOptionForEngine(engine);
   return `${option.title} (${option.technicalName})`;
-}
-
-export function isEngineModeAvailable(
-  engine: Engine,
-  statuses: EngineStatuses = {},
-): boolean {
-  return statuses[engine]?.available ?? true;
 }

@@ -53,14 +53,6 @@ function rowTitle(job: Job): string | undefined {
   return `${friendly.title}\n${formatErrorDescription(job.error)}`;
 }
 
-async function cancelJob(id: string) {
-  try {
-    await invoke("cancel_job", { id });
-  } catch (e) {
-    console.error("cancel_job failed:", e);
-  }
-}
-
 export function JobList({ jobs, onSelect, onCancel, selectedId }: Props) {
   if (jobs.length === 0) {
     return (
@@ -115,7 +107,6 @@ export function JobList({ jobs, onSelect, onCancel, selectedId }: Props) {
                   onClick={(e) => {
                     e.stopPropagation();
                     onCancel(job.id);
-                    cancelJob(job.id);
                   }}
                   title="Отменить"
                 >

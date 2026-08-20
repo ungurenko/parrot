@@ -14,6 +14,7 @@ import {
   DEFAULT_SUMMARY_MODEL,
   SUMMARY_MODEL_SIZE,
   type Job,
+  type ModelStage,
   type Settings,
   type SummarizerStatus,
 } from "../types";
@@ -154,9 +155,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
     useState<SummarizerStatus | null>(null);
   const [modelInstalling, setModelInstalling] = useState(false);
   const [modelProgress, setModelProgress] = useState(0);
-  const [modelStage, setModelStage] = useState<
-    "downloading" | "warmup" | "ready"
-  >("downloading");
+  const [modelStage, setModelStage] = useState<ModelStage>("downloading");
   const [modelError, setModelError] = useState<string | null>(null);
 
   const refreshSummarizerStatus = async () => {
@@ -185,7 +184,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       listenInTauri<number>("summary_model:progress", (e) => {
         setModelProgress(e.payload);
       }),
-      listenInTauri<"downloading" | "warmup" | "ready">(
+      listenInTauri<ModelStage>(
         "summary_model:stage",
         (e) => setModelStage(e.payload),
       ),

@@ -18,7 +18,6 @@ use crate::cancellation::CancelToken;
 const FAST_YOUTUBE_ARGS: &str =
     "youtube:player_client=mweb,web_embedded,default;player_skip=js;skip=hls,dash,translated_subs";
 const YT_DLP_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
-const FFMPEG_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 pub struct YouTubeAudio {
     pub wav_path: PathBuf,
@@ -36,7 +35,6 @@ pub async fn download_wav(
     on_progress: impl Fn(u32) + Send + Sync + 'static,
 ) -> Result<YouTubeAudio> {
     let yt_dlp = binaries::yt_dlp_path(app)?;
-    let ffmpeg = binaries::ffmpeg_path(app)?;
 
     let (raw_audio, title) = match download_raw_audio(
         &yt_dlp,
@@ -73,7 +71,8 @@ pub async fn download_wav(
     };
     on_progress(100);
 
-    let final_wav = normalize_audio(&ffmpeg, &raw_audio, workdir, stem, cancel.as_ref()).await?;
+    let final_wav = workdir.join(format!("{stem}.wav"));
+    super::local::extract_wav(app, &raw_audio, &final_wav, cancel.clone()).await?;
     let _ = std::fs::remove_file(&raw_audio);
 
     Ok(YouTubeAudio {
@@ -178,62 +177,6 @@ async fn download_raw_audio(
     // Find the downloaded file (the extension depends on the chosen stream).
     let raw_audio = find_downloaded(workdir, stem)?;
     Ok((raw_audio, title))
-}
-
-async fn normalize_audio(
-    ffmpeg: &Path,
-    raw_audio: &Path,
-    workdir: &Path,
-    stem: &str,
-    cancel: Option<&Arc<CancelToken>>,
-) -> Result<PathBuf> {
-    let final_wav = workdir.join(format!("{stem}.wav"));
-    let child = Command::new(ffmpeg)
-        .arg("-y")
-        .arg("-nostdin")
-        .arg("-hide_banner")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-i")
-        .arg(raw_audio)
-        .arg("-vn")
-        .arg("-ac")
-        .arg("1")
-        .arg("-ar")
-        .arg("16000")
-        .arg("-c:a")
-        .arg("pcm_s16le")
-        .arg(&final_wav)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    let pid = child.id();
-    if let (Some(tok), Some(pid)) = (cancel, pid) {
-        tok.register_pid(pid);
-    }
-    let norm_output = match timeout(FFMPEG_TIMEOUT, child.wait_with_output()).await {
-        Ok(output) => output?,
-        Err(_) => {
-            if let (Some(tok), Some(pid)) = (cancel, pid) {
-                tok.unregister_pid(pid);
-            }
-            return Err(anyhow!("ffmpeg не ответил за отведенное время"));
-        }
-    };
-    if let (Some(tok), Some(pid)) = (cancel, pid) {
-        tok.unregister_pid(pid);
-    }
-    if !norm_output.status.success() {
-        if cancel.map(|t| t.is_cancelled()).unwrap_or(false) {
-            return Err(anyhow!("cancelled"));
-        }
-        return Err(anyhow!(
-            "ffmpeg conversion failed: {}",
-            String::from_utf8_lossy(&norm_output.stderr).trim()
-        ));
-    }
-    Ok(final_wav)
 }
 
 fn find_downloaded(workdir: &Path, stem: &str) -> Result<PathBuf> {

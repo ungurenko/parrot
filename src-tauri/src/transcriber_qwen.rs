@@ -80,6 +80,14 @@ pub fn model_for_engine(engine: &str) -> Option<&'static str> {
     }
 }
 
+pub fn expected_bytes_for_engine(engine: &str) -> Option<u64> {
+    match engine {
+        ENGINE_QWEN_0_6B => Some(EXPECTED_QWEN_0_6B_BYTES),
+        ENGINE_QWEN_1_7B => Some(EXPECTED_QWEN_1_7B_BYTES),
+        _ => None,
+    }
+}
+
 pub fn is_ready(app: &AppHandle, engine: &str) -> bool {
     resolve_cli().is_ok() && model_cache_ready(app, engine)
 }
@@ -435,10 +443,8 @@ fn model_cache_exists_in(cache_dir: &Path, engine: &str) -> bool {
         return false;
     }
     // Guard against partial downloads: require at least 90% of expected size.
-    let expected = match engine {
-        ENGINE_QWEN_0_6B => EXPECTED_QWEN_0_6B_BYTES,
-        ENGINE_QWEN_1_7B => EXPECTED_QWEN_1_7B_BYTES,
-        _ => return false,
+    let Some(expected) = expected_bytes_for_engine(engine) else {
+        return false;
     };
     dir_size_bytes(&model_dir) >= (expected as f64 * 0.9) as u64
 }
@@ -604,5 +610,18 @@ mod tests {
         remove_ready_marker(&dir, ENGINE_QWEN_0_6B);
         assert!(!ready_marker_exists(&dir, ENGINE_QWEN_0_6B));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn expected_size_is_engine_scoped() {
+        assert_eq!(
+            expected_bytes_for_engine(ENGINE_QWEN_0_6B),
+            Some(EXPECTED_QWEN_0_6B_BYTES)
+        );
+        assert_eq!(
+            expected_bytes_for_engine(ENGINE_QWEN_1_7B),
+            Some(EXPECTED_QWEN_1_7B_BYTES)
+        );
+        assert_eq!(expected_bytes_for_engine("unknown"), None);
     }
 }

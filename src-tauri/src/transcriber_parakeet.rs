@@ -179,7 +179,7 @@ fn write_mlx_ready_marker(cache_dir: &Path) -> Result<()> {
 }
 
 fn install_mlx_runtime(app: &AppHandle, on_progress: impl Fn(&str) + Send + Sync) -> Result<()> {
-    let venv_python = crate::summarizer_qwen3::ensure_user_python_venv(app, &on_progress)?;
+    let venv_python = crate::mlx_env::ensure_user_python_venv(app, &on_progress)?;
     if mlx_python_has_package(&venv_python) {
         if let Ok(cache) = crate::paths::qwen_cache_dir(app) {
             if mlx_ready_marker_exists(&cache) {
@@ -496,6 +496,11 @@ fn validate_wav_spec(spec: hound::WavSpec) -> Result<()> {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    #[test]
+    fn parakeet_environment_keeps_its_own_runtime_package() {
+        assert_eq!(MLX_PACKAGE, "parakeet-mlx==0.5.2");
+    }
 
     #[test]
     fn estimated_chunk_count_should_merge_short_final_audio() {

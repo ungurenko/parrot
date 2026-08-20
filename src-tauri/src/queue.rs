@@ -133,7 +133,7 @@ impl PreparedOutcome {
 }
 
 pub struct JobQueue {
-    sender: Mutex<mpsc::UnboundedSender<QueuedJob>>,
+    sender: mpsc::UnboundedSender<QueuedJob>,
     next_sequence: AtomicU64,
     app: AppHandle,
     cancel: CancelRegistry,
@@ -143,10 +143,6 @@ pub struct JobQueue {
 impl JobQueue {
     pub fn cancel_registry(&self) -> CancelRegistry {
         self.cancel.clone()
-    }
-
-    pub fn app_handle(&self) -> AppHandle {
-        self.app.clone()
     }
 
     /// True while at least one job is queued, running, or canceling.
@@ -164,7 +160,7 @@ impl JobQueue {
         let cancel = CancelRegistry::new();
         let active_count = Arc::new(AtomicUsize::new(0));
         let queue = Arc::new(Self {
-            sender: Mutex::new(prep_tx),
+            sender: prep_tx,
             next_sequence: AtomicU64::new(0),
             app: app.clone(),
             cancel: cancel.clone(),
@@ -187,7 +183,7 @@ impl JobQueue {
         queue
     }
 
-    pub async fn enqueue(&self, job: Job) -> Result<()> {
+    pub fn enqueue(&self, job: Job) -> Result<()> {
         let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         self.cancel.create(&job.id);
         let _ = self.app.emit(
@@ -197,17 +193,17 @@ impl JobQueue {
                 source_name: job.display_name.clone(),
             },
         );
-        let tx = self.sender.lock().await;
         self.active_count.fetch_add(1, Ordering::Relaxed);
-        tx.send(QueuedJob {
-            sequence,
-            job: job.clone(),
-        })
-        .map_err(|e| {
-            self.active_count.fetch_sub(1, Ordering::Relaxed);
-            self.cancel.remove(&job.id);
-            anyhow::anyhow!(e.to_string())
-        })?;
+        self.sender
+            .send(QueuedJob {
+                sequence,
+                job: job.clone(),
+            })
+            .map_err(|e| {
+                self.active_count.fetch_sub(1, Ordering::Relaxed);
+                self.cancel.remove(&job.id);
+                anyhow::anyhow!(e.to_string())
+            })?;
         Ok(())
     }
 }
@@ -520,25 +516,14 @@ async fn transcribe_prepared(
                 },
             );
         };
-        match engine_for_task.as_str() {
-            "parakeet" => {
-                let dir = paths::parakeet_dir(&app_for_task)?;
-                transcriber_parakeet::transcribe_wav(&dir, &wav_for_task, progress)
-            }
-            "whisper" => {
-                let model = paths::model_path(&app_for_task)?;
-                transcriber::transcribe_wav(&model, &wav_for_task, &language_for_task, progress)
-            }
-            engine if transcriber_qwen::is_qwen_engine(engine) => transcriber_qwen::transcribe_wav(
-                &app_for_task,
-                &wav_for_task,
-                engine,
-                &language_for_task,
-                token_for_task.clone(),
-                progress,
-            ),
-            other => anyhow::bail!("Неизвестный движок транскрибации: {other}"),
-        }
+        transcribe_wav_for_engine(
+            &app_for_task,
+            &wav_for_task,
+            &engine_for_task,
+            &language_for_task,
+            token_for_task,
+            progress,
+        )
     })
     .await;
     ticker_stop.store(true, Ordering::Relaxed);
@@ -598,6 +583,30 @@ pub(crate) fn ensure_model_ready(app: &AppHandle, engine: &str) -> Result<()> {
         other => anyhow::bail!("Неизвестный движок транскрибации: {other}"),
     }
     Ok(())
+}
+
+pub(crate) fn transcribe_wav_for_engine(
+    app: &AppHandle,
+    wav_path: &Path,
+    engine: &str,
+    language: &str,
+    cancel: Option<Arc<CancelToken>>,
+    progress: impl Fn(u32) + Send + Sync + 'static,
+) -> Result<String> {
+    match engine {
+        "parakeet" => {
+            let dir = paths::parakeet_dir(app)?;
+            transcriber_parakeet::transcribe_wav(&dir, wav_path, progress)
+        }
+        "whisper" => {
+            let model = paths::model_path(app)?;
+            transcriber::transcribe_wav(&model, wav_path, language, progress)
+        }
+        engine if transcriber_qwen::is_qwen_engine(engine) => {
+            transcriber_qwen::transcribe_wav(app, wav_path, engine, language, cancel, progress)
+        }
+        other => anyhow::bail!("Неизвестный движок транскрибации: {other}"),
+    }
 }
 
 fn emit_error(app: &AppHandle, job: &Job, message: String) {

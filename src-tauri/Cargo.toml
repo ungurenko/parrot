@@ -39,7 +39,6 @@ reqwest = { version = "0.12", features = [
 ], default-features = false }
 futures-util = "0.3"
 anyhow = "1"
-thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 dirs = "5"
 tracing = "0.1"
@@ -52,6 +51,7 @@ tar = "0.4"
 flate2 = "1"
 sha2 = "0.10"
 hex = "0.4"
+time = { version = "0.3.47", features = ["formatting"] }
 
 [profile.dev]
 incremental = true

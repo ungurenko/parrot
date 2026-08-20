@@ -3351,7 +3351,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
- "thiserror 2.0.18",
+ "time",
  "tokio",
  "tracing",
  "tracing-appender",

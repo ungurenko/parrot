@@ -1,6 +1,5 @@
 import {
   listen,
-  type Event,
   type EventCallback,
   type EventName,
   type UnlistenFn,
@@ -35,5 +34,3 @@ export function cleanupTauriListeners(
       .catch(() => {});
   });
 }
-
-export type TauriEventPayload<T> = Event<T>;

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::fs_metrics::DirSizeCache;
+use crate::commands::spawn_model_progress_poller;
 use crate::{history, paths, summarizer_qwen3, writer};
 use crate::{validate_saved_file_path, AppState, CancelRegistryGuard, SavedFileKind};
 
@@ -72,31 +72,13 @@ pub(crate) async fn download_summarizer_model(
 
     let expected_bytes = summarizer_qwen3::expected_summary_bytes(&app);
     let cache_dir = paths::qwen_cache_dir(&app).map_err(|e| e.to_string())?;
-    let poll_app = app.clone();
-    let poll_handle = tauri::async_runtime::spawn(async move {
-        let mut size_cache = DirSizeCache::default();
-        let warmup_threshold = (expected_bytes as f64 * 0.9) as u64;
-        let mut warmup_started: Option<std::time::Instant> = None;
-        let mut stage_emitted = "downloading";
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            size_cache.clear();
-            let size = size_cache.get(&cache_dir);
-            if size >= warmup_threshold {
-                let started = warmup_started.get_or_insert_with(std::time::Instant::now);
-                if stage_emitted != "warmup" {
-                    let _ = poll_app.emit("summary_model:stage", "warmup");
-                    stage_emitted = "warmup";
-                }
-                let elapsed = started.elapsed().as_secs_f64();
-                let pct = (95.0 + (elapsed / 20.0).min(1.0) * 4.0) as u32;
-                let _ = poll_app.emit("summary_model:progress", pct);
-            } else {
-                let pct = ((size as f64 / expected_bytes as f64) * 95.0).clamp(1.0, 95.0) as u32;
-                let _ = poll_app.emit("summary_model:progress", pct);
-            }
-        }
-    });
+    let poll_handle = spawn_model_progress_poller(
+        app.clone(),
+        cache_dir,
+        expected_bytes,
+        "summary_model:progress",
+        "summary_model:stage",
+    );
 
     let app_for_task = app.clone();
     let token_for_task = token.clone();
@@ -151,7 +133,7 @@ pub(crate) async fn summarize(
         .summary_cancel
         .try_create(&id)
         .ok_or_else(|| "Конспект для этой записи уже генерируется".to_string())?;
-    let cancel_registry = state.summary_cancel.clone();
+    let _task_guard = CancelRegistryGuard::new(state.summary_cancel.clone(), id.clone());
 
     let id_for_task = id.clone();
     let id_for_progress = id.clone();
@@ -205,7 +187,6 @@ pub(crate) async fn summarize(
 
     ticker_stop.store(true, std::sync::atomic::Ordering::Relaxed);
     ticker_handle.abort();
-    cancel_registry.remove(&id_for_task);
 
     match result {
         Ok(Ok((markdown, output))) => {

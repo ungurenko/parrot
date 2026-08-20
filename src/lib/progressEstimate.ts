@@ -1,6 +1,4 @@
-import type { JobStage, ModelProgressDetail } from "../types";
-
-type ModelStage = "downloading" | "warmup" | "ready";
+import type { JobStage, ModelProgressDetail, ModelStage } from "../types";
 
 export interface ProgressMessage {
   title: string;

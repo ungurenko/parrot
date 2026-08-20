@@ -8,10 +8,8 @@ pub enum SummaryRuntime {
 pub struct SummaryModelSpec {
     pub id: &'static str,
     pub label: &'static str,
-    pub short_label: &'static str,
     pub repo: &'static str,
     pub expected_bytes: u64,
-    pub size_label: &'static str,
     pub runtime: SummaryRuntime,
     pub ready_marker: &'static str,
 }
@@ -21,10 +19,8 @@ pub const DEFAULT_SUMMARY_MODEL: &str = "qwen3-4b";
 pub const QWEN3_4B_SUMMARY: SummaryModelSpec = SummaryModelSpec {
     id: "qwen3-4b",
     label: "Qwen 3-4B Instruct",
-    short_label: "Qwen",
     repo: "mlx-community/Qwen3-4B-Instruct-2507-4bit",
     expected_bytes: 2_262_920_192,
-    size_label: "~2.3 ГБ",
     runtime: SummaryRuntime::MlxLm,
     ready_marker: ".parrot-ready-summary-qwen3-4b",
 };
@@ -32,10 +28,8 @@ pub const QWEN3_4B_SUMMARY: SummaryModelSpec = SummaryModelSpec {
 pub const GEMMA4_E2B_SUMMARY: SummaryModelSpec = SummaryModelSpec {
     id: "gemma4-e2b",
     label: "Gemma 4 E2B-it",
-    short_label: "Gemma",
     repo: "mlx-community/gemma-4-e2b-it-4bit",
     expected_bytes: 3_580_765_126,
-    size_label: "~3.6 ГБ",
     runtime: SummaryRuntime::MlxVlm,
     ready_marker: ".parrot-ready-summary-gemma4-e2b",
 };

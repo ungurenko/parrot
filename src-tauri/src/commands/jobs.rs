@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::queue::{self, Job, SourceKind};
 use crate::{settings, source, AppState};
@@ -12,10 +12,11 @@ pub(crate) struct EnqueueResult {
 }
 
 #[tauri::command]
-pub(crate) async fn enqueue_file(
+pub(crate) fn enqueue_file(
     path: String,
     engine: Option<String>,
     language: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<EnqueueResult, String> {
     let p = PathBuf::from(&path);
@@ -25,7 +26,7 @@ pub(crate) async fn enqueue_file(
     if !source::is_supported_file(&p) {
         return Err("Неподдерживаемый формат файла".into());
     }
-    let settings = settings::load(&state.queue.app_handle());
+    let settings = settings::load(&app);
     let engine = engine.unwrap_or_else(|| settings.engine.clone());
     let language = language.unwrap_or_else(|| settings.language.clone());
     validate_job_options(&engine, &language)?;
@@ -44,23 +45,23 @@ pub(crate) async fn enqueue_file(
             language,
             save_dir: settings.save_dir,
         })
-        .await
         .map_err(|e| e.to_string())?;
     Ok(EnqueueResult { id })
 }
 
 #[tauri::command]
-pub(crate) async fn enqueue_youtube(
+pub(crate) fn enqueue_youtube(
     url: String,
     engine: Option<String>,
     language: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<EnqueueResult, String> {
     let trimmed = url.trim().to_string();
     if !source::is_youtube_url(&trimmed) {
         return Err("URL не похож на YouTube-ссылку".into());
     }
-    let settings = settings::load(&state.queue.app_handle());
+    let settings = settings::load(&app);
     let engine = engine.unwrap_or_else(|| settings.engine.clone());
     let language = language.unwrap_or_else(|| settings.language.clone());
     validate_job_options(&engine, &language)?;
@@ -75,7 +76,6 @@ pub(crate) async fn enqueue_youtube(
             language,
             save_dir: settings.save_dir,
         })
-        .await
         .map_err(|e| e.to_string())?;
     Ok(EnqueueResult { id })
 }

@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::AppHandle;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::paths;
 
@@ -91,7 +92,7 @@ pub fn get(app: &AppHandle, id: &str) -> Option<HistoryEntry> {
 }
 
 /// UTC ISO-8601 timestamp for "now".
-/// Format: "YYYY-MM-DDTHH:MM:SSZ". No chrono dep — use std::time.
+/// Format: "YYYY-MM-DDTHH:MM:SSZ".
 pub fn now_iso8601() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -102,30 +103,11 @@ pub fn now_iso8601() -> String {
 }
 
 fn format_unix_secs(secs: u64) -> String {
-    // Days since 1970-01-01
-    let mut days = (secs / 86_400) as i64;
-    let mut rem = secs % 86_400;
-    let hour = rem / 3600;
-    rem %= 3600;
-    let minute = rem / 60;
-    let second = rem % 60;
-
-    // Convert days to (year, month, day) using civil-from-days (Hinnant).
-    days += 719_468;
-    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let doe = (days - era * 146_097) as u64; // [0, 146096]
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    let year = if m <= 2 { y + 1 } else { y };
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, m, d, hour, minute, second
-    )
+    let timestamp = i64::try_from(secs).unwrap_or(0);
+    OffsetDateTime::from_unix_timestamp(timestamp)
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH)
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 #[cfg(test)]
@@ -175,6 +157,7 @@ mod tests {
     fn format_unix_secs_matches_known_timestamps() {
         assert_eq!(format_unix_secs(0), "1970-01-01T00:00:00Z");
         assert_eq!(format_unix_secs(1_700_000_000), "2023-11-14T22:13:20Z");
+        assert_eq!(format_unix_secs(1_709_164_800), "2024-02-29T00:00:00Z");
         assert_eq!(format_unix_secs(1_735_689_600), "2025-01-01T00:00:00Z");
     }
 }

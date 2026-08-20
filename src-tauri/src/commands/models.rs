@@ -5,7 +5,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::cancellation;
-use crate::fs_metrics::DirSizeCache;
+use crate::commands::spawn_model_progress_poller;
 use crate::{model, paths, preload_active_engine, settings, transcriber, transcriber_parakeet};
 use crate::{transcriber_qwen, AppState, CancelRegistryGuard};
 
@@ -109,43 +109,21 @@ async fn download_model_inner(
                 .map_err(|e| e.to_string())?;
         }
         engine if transcriber_qwen::is_qwen_engine(engine) => {
-            let expected_bytes: u64 = match engine {
-                transcriber_qwen::ENGINE_QWEN_0_6B => transcriber_qwen::EXPECTED_QWEN_0_6B_BYTES,
-                transcriber_qwen::ENGINE_QWEN_1_7B => transcriber_qwen::EXPECTED_QWEN_1_7B_BYTES,
-                _ => transcriber_qwen::EXPECTED_QWEN_1_7B_BYTES,
-            };
+            let expected_bytes = transcriber_qwen::expected_bytes_for_engine(engine)
+                .ok_or_else(|| format!("Неизвестная Qwen-модель: {engine}"))?;
             let _ = app.emit("model:progress", 1u32);
             let _ = app.emit("model:stage", "downloading");
             let engine_str = engine.to_string();
             let app_for_task = app.clone();
             let cache_dir = paths::qwen_cache_dir(&app).map_err(|e| e.to_string())?;
 
-            let poll_app = app.clone();
-            let poll_handle = tauri::async_runtime::spawn(async move {
-                let mut size_cache = DirSizeCache::default();
-                let warmup_threshold = (expected_bytes as f64 * 0.9) as u64;
-                let mut warmup_started: Option<std::time::Instant> = None;
-                let mut stage_emitted = "downloading";
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                    size_cache.clear();
-                    let size = size_cache.get(&cache_dir);
-                    if size >= warmup_threshold {
-                        let started = warmup_started.get_or_insert_with(std::time::Instant::now);
-                        if stage_emitted != "warmup" {
-                            let _ = poll_app.emit("model:stage", "warmup");
-                            stage_emitted = "warmup";
-                        }
-                        let elapsed = started.elapsed().as_secs_f64();
-                        let pct = (95.0 + (elapsed / 20.0).min(1.0) * 4.0) as u32;
-                        let _ = poll_app.emit("model:progress", pct);
-                    } else {
-                        let pct =
-                            ((size as f64 / expected_bytes as f64) * 95.0).clamp(1.0, 95.0) as u32;
-                        let _ = poll_app.emit("model:progress", pct);
-                    }
-                }
-            });
+            let poll_handle = spawn_model_progress_poller(
+                app.clone(),
+                cache_dir,
+                expected_bytes,
+                "model:progress",
+                "model:stage",
+            );
 
             let result = tauri::async_runtime::spawn_blocking(move || {
                 transcriber_qwen::warmup_model(&app_for_task, &engine_str, token)
@@ -162,12 +140,6 @@ async fn download_model_inner(
     }
     preload_active_engine(app);
     Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn delete_model(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let engine = settings::load(&app).engine;
-    delete_model_for_engine(app, state, engine).await
 }
 
 #[tauri::command]
