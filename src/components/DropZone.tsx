@@ -77,7 +77,7 @@ export function DropZone({ onFiles }: Props) {
 
       <div className="hero-text">
         <h1>Перетащите файл</h1>
-        <p>Аудио или видео — текст останется на этом&nbsp;Mac.</p>
+        <p>Аудио или видео</p>
         <p className="format-line">{FORMAT_HINT}</p>
       </div>
 

@@ -547,27 +547,9 @@ body {
     100% { transform: translateX(250%); }
   }
 
-  /* Waveform */
-  .waveform {
-    display: flex; align-items: flex-end; gap: 3px;
-    height: 36px;
-    margin-top: 14px;
-  }
-  .waveform .bar-w {
-    flex: 1;
-    height: 100%;
-    min-width: 2px;
-    background: linear-gradient(180deg, #ff7a59, #f5c518);
-    border-radius: 2px;
-    transform-origin: bottom;
-    opacity: 0.35;
-    transition: transform 0.45s ease, opacity 0.45s ease;
-  }
-  .waveform .bar-w.active { opacity: 1; }
   @media (prefers-reduced-motion: reduce) {
     .parrot-pulse::before, .parrot-pulse::after { animation: none; }
     .progress-fill.indeterminate { animation: none; }
-    .waveform .bar-w { transition: none; }
   }
 
   /* Processing: stages timeline */
@@ -659,14 +641,6 @@ body {
   .tip-card .tip-text {
     flex: 1;
     min-width: 0;
-    animation: tip-fade 6s ease-in-out infinite;
-  }
-  @keyframes tip-fade {
-    0%, 10%, 90%, 100% { opacity: 1; }
-    50%                { opacity: 0.65; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .tip-card .tip-text { animation: none; }
   }
 
   /* Doc card (result) — cool neutral paper-like */
@@ -1591,8 +1565,8 @@ body {
   .hero-drop .choose-btn {
     margin-top: 6px;
   }
-  .choose-btn,
-  .btn-primary {
+  /* Primary CTA — единственная красная кнопка на экране */
+  .choose-btn {
     height: 40px;
     display: inline-flex;
     align-items: center;
@@ -1608,15 +1582,40 @@ body {
     font-weight: 600;
     letter-spacing: 0;
   }
-  .choose-btn:hover,
-  .btn-primary:hover:not(:disabled) {
+  .choose-btn:hover {
     background: linear-gradient(180deg, #ff746b 0%, #ff5750 100%);
     transform: translateY(-1px);
   }
+
+  /* Secondary action («Расшифровать» у YouTube) — спокойная, не спорит с красной */
+  .btn-primary {
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    padding: 0 22px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--hairline-strong);
+    box-shadow: var(--shadow-elev);
+    color: var(--ink);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: var(--surface-2);
+    transform: translateY(-1px);
+  }
+  .btn-primary:active { transform: translateY(0); }
   .btn-primary:disabled {
-    background: #e5e7eb;
+    background: var(--surface-2);
     box-shadow: none;
-    color: #9aa1ad;
+    color: var(--ink-4);
+    cursor: not-allowed;
   }
   .youtube-divider {
     display: grid;
@@ -1746,11 +1745,11 @@ body {
   .history-heading {
     margin: 0;
     padding: 0;
-    font-size: 19px;
-    line-height: 1.2;
+    font-size: 13px;
+    line-height: 1.3;
     font-weight: 600;
-    letter-spacing: -0.01em;
-    color: var(--ink);
+    letter-spacing: 0.01em;
+    color: var(--ink-2);
   }
   .history-items {
     display: flex;
@@ -1769,22 +1768,38 @@ body {
   .history-item {
     display: grid;
     align-items: center;
-    grid-template-columns: 44px minmax(0, 1fr) 28px 28px;
+    grid-template-columns: 44px minmax(0, 1fr);
     gap: 10px;
     padding: 14px 0;
     border-radius: 0;
     background: transparent;
-    border: 0;
     border-bottom: 1px solid var(--hairline);
     box-shadow: none;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     transition: background 0.15s, border-color 0.15s, transform 0.15s;
+    position: relative;
   }
   .history-item:hover {
     background: transparent;
     border-color: var(--hairline);
   }
+  /* Плавная подложка под кнопками действий — появляется при наведении,
+     чтобы текст под ними не просвечивал */
+  .history-item::after {
+    content: "";
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    right: -10px;
+    width: 88px;
+    background: linear-gradient(to right, transparent, var(--surface-side) 45%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 1;
+  }
+  .history-item:hover::after { opacity: 1; }
   .history-media {
     width: 42px;
     height: 42px;
@@ -1817,11 +1832,20 @@ body {
   }
   .history-repeat,
   .history-delete {
-    width: 30px;
-    height: 30px;
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    width: 28px;
+    height: 28px;
     align-self: center;
     opacity: 0;
+    background: var(--surface-side);
+    border: 0.5px solid var(--hairline);
+    box-shadow: var(--shadow-elev);
   }
+  .history-delete { right: -6px; }
+  .history-repeat { right: 26px; }
   .history-item:hover .history-repeat,
   .history-item:hover .history-delete,
   .history-repeat:focus-visible,
@@ -1830,6 +1854,20 @@ body {
 
   /* Dictation pill — мик + клавиши + статус + LED справа */
   .dictation-pill { gap: 8px; padding: 0 11px 0 11px; }
+  /* В режиме ожидания пилюля блёклая — не спорит с кнопками */
+  .dictation-pill.idle {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    color: var(--ink-3);
+  }
+  .dictation-pill.idle .dictation-mic,
+  .dictation-pill.idle .dictation-status { color: var(--ink-3); }
+  .dictation-pill.idle .dictation-kbd {
+    background: transparent;
+    border-color: var(--hairline);
+    color: var(--ink-3);
+  }
   .dictation-mic { color: var(--ink-2); flex-shrink: 0; }
   .dictation-keys {
     display: inline-flex;
@@ -2279,14 +2317,10 @@ body {
   }
   .history-repeat {
     flex-shrink: 0;
-    width: 28px;
-    height: 28px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border-radius: var(--r-pill);
-    background: transparent;
-    border: 0.5px solid transparent;
     color: var(--ink-3);
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
@@ -2296,7 +2330,7 @@ body {
     color: #235fa8;
     border-color: rgba(58,140,255,0.18);
   }
-  .history-repeat:disabled {
+  .history-item:hover .history-repeat:disabled {
     opacity: 0.35;
     cursor: not-allowed;
   }
@@ -2459,4 +2493,16 @@ body {
     border-color: rgba(255, 91, 76, 0.28);
     box-shadow: 0 5px 18px rgba(18, 22, 30, 0.05);
   }
+}
+
+/* Второе по значимости действие («Сделать конспект») — фирменный коралловый акцент.
+   Вне @layer, чтобы перебить утилиты Tailwind на кнопке. */
+.result-action-bar .btn-accent {
+  color: var(--parrot-accent);
+  border-color: color-mix(in srgb, var(--parrot-accent) 35%, transparent);
+}
+.result-action-bar .btn-accent:hover {
+  background: color-mix(in srgb, var(--parrot-accent) 8%, transparent);
+  color: var(--parrot-accent);
+  border-color: color-mix(in srgb, var(--parrot-accent) 50%, transparent);
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import parrotImg from "/parrot.png";
 import { processingProgressMessage } from "@/lib/progressEstimate";
 import type { Job } from "../types";
@@ -9,7 +9,6 @@ interface Props {
 }
 
 const CANCELLED_MARKER = "Отменено пользователем";
-
 function statusText(job: Job): string {
   if (job.status === "queued") return "В очереди…";
   if (job.status === "canceling") return "Отменяю…";
@@ -37,12 +36,6 @@ function statusText(job: Job): string {
   }
 }
 
-const BAR_COUNT = 40;
-const BAR_HEIGHTS = Array.from(
-  { length: BAR_COUNT },
-  (_, i) => 0.3 + 0.6 * Math.abs(Math.sin(i * 1.618 + 0.8)),
-);
-
 type StageKey = "prep" | "transcribe" | "save";
 
 function pipelineForJob(job: Job): {
@@ -52,7 +45,7 @@ function pipelineForJob(job: Job): {
   const isYoutube =
     job.stage === "downloading" || job.stage === "preparing";
   const prepTitle = isYoutube ? "Скачивание" : "Извлечение";
-  const prepSub = isYoutube ? "yt-dlp" : "ffmpeg";
+  const prepSub = isYoutube ? "из ссылки" : "из файла";
 
   let current: StageKey = "prep";
   if (job.stage === "transcribing") current = "transcribe";
@@ -62,8 +55,8 @@ function pipelineForJob(job: Job): {
     current,
     labels: {
       prep: { title: prepTitle, sub: prepSub },
-      transcribe: { title: "Транскрибация", sub: "движок" },
-      save: { title: "Сохранение", sub: ".txt" },
+      transcribe: { title: "Транскрибация", sub: "распознавание речи" },
+      save: { title: "Сохранение", sub: "в текстовый файл" },
     },
   };
 }
@@ -135,14 +128,6 @@ export function ProcessingView({ job, onCancel }: Props) {
     : statusText(job);
   const percent = job.status === "running" ? Math.max(job.percent, 3) : 0;
 
-  const bars = useMemo(() => {
-    const activeCount = Math.round((percent / 100) * BAR_COUNT);
-    return BAR_HEIGHTS.map((h, i) => ({
-      height: h,
-      active: i < activeCount,
-    }));
-  }, [percent]);
-
   const indeterminate =
     job.status === "running" && job.percent <= 1 && job.stage === null;
 
@@ -186,15 +171,6 @@ export function ProcessingView({ job, onCancel }: Props) {
               style={indeterminate ? undefined : { width: `${percent}%` }}
             />
           </div>
-          <div className="waveform" aria-hidden="true">
-            {bars.map((b, i) => (
-              <span
-                key={i}
-                className={b.active ? "bar-w active" : "bar-w"}
-                style={{ transform: `scaleY(${b.height})` }}
-              />
-            ))}
-          </div>
         </div>
       </div>
 
@@ -233,7 +209,7 @@ export function ProcessingView({ job, onCancel }: Props) {
 
       <button
         type="button"
-        className="ghost-btn self-start"
+        className="ghost-btn self-center"
         disabled={job.status === "canceling"}
         onClick={() => onCancel(job.id)}
       >

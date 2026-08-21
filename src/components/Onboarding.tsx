@@ -156,9 +156,6 @@ export function Onboarding({ onDone }: Props) {
             Parrot превращает аудио, видео и ссылки YouTube в текст — прямо на
             вашем Mac.
           </p>
-          <p className="text-sm text-muted-foreground">
-            Подготовим Parrot к первой расшифровке. Без лишних настроек.
-          </p>
         </CardHeader>
 
         <CardContent className="px-6 pb-6">
@@ -201,9 +198,6 @@ export function Onboarding({ onDone }: Props) {
                   </div>
                   <div className="quick-start-title">{selectedMode.title}</div>
                   <div className="quick-start-text">{selectedMode.detail}</div>
-                  <div className="quick-start-tech">
-                    Модель: {selectedMode.technicalName} · {selectedMode.size}
-                  </div>
                 </div>
                 <Button
                   type="button"

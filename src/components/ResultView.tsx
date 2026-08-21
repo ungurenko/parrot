@@ -252,27 +252,21 @@ export function ResultView({
   const engine = job.engine ? readableEngineName(job.engine) : (engineLabel ?? ENGINE_LABEL.parakeet);
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <button type="button" className="ghost-btn" onClick={onReset}>
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-          Новая транскрипция
-        </button>
-        <span className="pill min-w-0 flex-1 max-w-[60%] justify-end">
-          <span className="led" />
-          <span title={job.sourceName}>{job.sourceName}</span>
-        </span>
-      </div>
+      <button type="button" className="ghost-btn self-start" onClick={onReset}>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+        Новая транскрипция
+      </button>
 
       <div className="result-action-bar">
         <Button type="button" onClick={copyText}>
@@ -290,7 +284,8 @@ export function ResultView({
         </Button>
         <Button
           type="button"
-          variant={summarizerEnabled ? "outline" : "default"}
+          variant="outline"
+          className="btn-accent"
           onClick={() => {
             if (!summarizerEnabled) {
               void enableSummarizerAndDownload();
@@ -308,7 +303,7 @@ export function ResultView({
         </Button>
         <Button
           type="button"
-          variant="outline"
+          variant="ghost"
           onClick={improveQuality}
           disabled={!job.sourceKind || !job.sourceValue}
           title={
