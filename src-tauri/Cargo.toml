@@ -59,6 +59,5 @@ incremental = true
 [profile.release]
 codegen-units = 1
 lto = true
-opt-level = "s"
-panic = "abort"
+opt-level = 3
 strip = true

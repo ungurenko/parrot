@@ -3,6 +3,7 @@ mod cancellation;
 mod commands;
 mod dictation;
 mod fs_metrics;
+mod hardware;
 mod history;
 mod mlx_env;
 mod model;
@@ -58,6 +59,7 @@ fn shutdown_runtime(app: &AppHandle) {
     binaries::stop_yt_dlp_startup_cache();
     transcriber_qwen::stop_server();
     summarizer_qwen3::stop_server();
+    transcriber_parakeet::stop_worker();
     if let Some(state) = app.try_state::<AppState>() {
         state.summary_cancel.cancel_all();
         state.model_cancel.cancel_all();
@@ -115,6 +117,9 @@ fn set_settings(
     }
     settings::save(&app, &new).map_err(|e| e.to_string())?;
     if old.engine != new.engine {
+        if old.engine == "parakeet" {
+            transcriber_parakeet::stop_worker();
+        }
         preload_active_engine(app.clone());
         if new.engine == "parakeet" {
             transcriber_parakeet::spawn_mlx_install(app.clone());
@@ -202,7 +207,12 @@ pub(crate) fn preload_active_engine(handle: AppHandle) {
             "parakeet" => {
                 transcriber_qwen::stop_server();
                 if paths::parakeet_files_ready(&handle) {
-                    if let Ok(dir) = paths::parakeet_dir(&handle) {
+                    // Warm fp16 MLX worker when the machine can afford it;
+                    // fall back to loading int8 ONNX weights otherwise.
+                    if transcriber_parakeet::preload_worker() {
+                        tracing::info!("Parakeet MLX worker warmed");
+                        transcriber_parakeet::clear_cache();
+                    } else if let Ok(dir) = paths::parakeet_dir(&handle) {
                         tracing::info!("Preloading Parakeet TDT v3…");
                         match transcriber_parakeet::preload(&dir) {
                             Ok(_) => tracing::info!("Parakeet preload complete"),

@@ -28,7 +28,7 @@
 | `src-tauri/src/cancellation.rs` | `CancelRegistry` + `CancelToken` с atomic-флагом и PID-регистрацией для SIGTERM. `try_create` — атомарное создание без перезаписи. `cancel_all` — массовая отмена (используется на close) |
 | `src-tauri/src/source/` | Извлечение аудио: `local.rs` (ffmpeg), `youtube.rs` (yt-dlp) |
 | `src-tauri/src/transcriber.rs` | Whisper engine (whisper-rs + Metal + CoreML) |
-| `src-tauri/src/transcriber_parakeet.rs` | Parakeet V3 engine (parakeet-rs, ONNX, int8, 8 потоков) |
+| `src-tauri/src/transcriber_parakeet.rs` | Parakeet V3 engine (parakeet-rs ONNX int8 CPU + тёплый MLX-воркер fp16 с JSON-протоколом поверх stdin/stdout) |
 | `src-tauri/src/transcriber_qwen.rs` | Qwen3-ASR MLX engine (subprocess + warm server) |
 | `src-tauri/src/summarizer_qwen3.rs` | Локальный LLM-конспект через `mlx_lm.generate` (subprocess из user-space venv). `install_env` сам качает standalone Python от astral-sh + ставит mlx-lm — без системных зависимостей. Тот же HF_HOME, что и ASR |
 | `src-tauri/src/prompts.rs` | Системный и user-промпт для конспекта на русском |
@@ -58,6 +58,8 @@
 - **IPC** — команды через `tauri::command`, события от Rust (`job:*`, `model:*`, `summary:*`, `summary_model:*`) через `AppHandle::emit` с `#[serde(rename_all = "camelCase")]`.
 - **Progress pipeline** — stages `downloading`/`extracting`/`transcribing` с процентами, парсинг прогресса yt-dlp из `--progress-template`.
 - **Чанкование для Parakeet TDT** — ONNX-граф имеет лимит ~8-10 мин; в `transcriber_parakeet` режем на 5-мин чанки с 5-сек overlap.
+- **Тёплый MLX-воркер Parakeet** — один Python-процесс держит модель resident и обслуживает WAV-пути построчным JSON-протоколом (`ready`/`progress`/`result`). Убирает ~3–14 c загрузки модели с каждой задачи и диктовки. Жизненный цикл: `preload_worker()` при старте/смене движка, `stop_worker()` при уходе с parakeet и в `shutdown_runtime`, авто-перезапуск при смерти воркера (1 ретрай), простой >5 мин освобождает память. Прогресс длинных файлов идёт из `chunk_callback` воркера. Гейт по железу — `hardware::mlx_acceleration_allowed()` (RAM ≥ 14 GiB, иначе только int8 ONNX); на слабых Macах установка MLX не запускается вовсе. При готовности MLX ONNX-кеш сбрасывается (`clear_cache`), чтобы не держать обе модели.
+- **hardware.rs** — sysctl hw.memsize, порог решения для MLX; чистая функция `ram_allows_mlx` покрыта тестами.
 
 ## Модели
 

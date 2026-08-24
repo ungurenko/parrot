@@ -1,13 +1,17 @@
 use anyhow::{anyhow, Context, Result};
-use once_cell::sync::Lazy;
 use parakeet_rs::{
     ExecutionConfig as ParakeetExecConfig, ExecutionProvider, ParakeetTDT, Transcriber,
 };
 use parking_lot::Mutex;
+use serde::Deserialize;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 // Parakeet TDT has a ~8-10 min sequence-length limit. Five-minute chunks are
@@ -17,7 +21,7 @@ const OVERLAP_SECONDS: usize = 5;
 const MIN_FINAL_CHUNK_SECONDS: usize = 30;
 const SAMPLE_RATE: u32 = 16_000;
 
-static MODEL: Lazy<Mutex<Option<Arc<Mutex<ParakeetTDT>>>>> = Lazy::new(|| Mutex::new(None));
+static MODEL: LazyLock<Mutex<Option<Arc<Mutex<ParakeetTDT>>>>> = LazyLock::new(|| Mutex::new(None));
 static MLX_PYTHON: Mutex<Option<Option<PathBuf>>> = Mutex::new(None);
 static MLX_INSTALL_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -25,11 +29,48 @@ const MLX_MODEL: &str = "mlx-community/parakeet-tdt-0.6b-v3";
 const MLX_READY_MARKER: &str = ".parrot-ready-parakeet-mlx";
 const MLX_PACKAGE: &str = "parakeet-mlx==0.5.2";
 
-const MLX_TRANSCRIBE_SCRIPT: &str = r#"
+/// Persistent worker: loads the fp16 model once, then serves WAV paths on
+/// stdin and answers with line-delimited JSON events. Spawning Python per
+/// job used to pay interpreter startup + model load (~3-8 s) every time,
+/// which dominated short files and dictation.
+const MLX_WORKER_SCRIPT: &str = r#"
+import json
 import sys
-from parakeet_mlx import from_pretrained
-model = from_pretrained(sys.argv[1])
-print(model.transcribe(sys.argv[2], chunk_duration=120.0, overlap_duration=15.0).text)
+
+
+def emit(payload):
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    from parakeet_mlx import from_pretrained
+
+    model = from_pretrained(sys.argv[1])
+    emit({"event": "ready"})
+    for line in sys.stdin:
+        path = line.strip()
+        if not path:
+            continue
+        if path == "SHUTDOWN":
+            break
+        try:
+            def on_chunk(done, total):
+                emit({"event": "progress", "done": done, "total": total})
+
+            result = model.transcribe(
+                path,
+                chunk_duration=120.0,
+                overlap_duration=15.0,
+                chunk_callback=on_chunk,
+            )
+            emit({"event": "result", "ok": True, "text": result.text})
+        except Exception as exc:
+            emit({"event": "result", "ok": False, "error": str(exc)})
+    emit({"event": "bye"})
+
+
+main()
 "#;
 
 pub fn preload(model_dir: &Path) -> Result<()> {
@@ -60,7 +101,7 @@ pub fn is_mlx_ready() -> bool {
 /// Install Python + parakeet-mlx + download weights in the background.
 /// Transcription keeps using ONNX until this finishes.
 pub fn spawn_mlx_install(app: AppHandle) {
-    if is_mlx_ready() {
+    if !crate::hardware::mlx_acceleration_allowed() || is_mlx_ready() {
         return;
     }
     if MLX_INSTALL_STARTED.swap(true, Ordering::SeqCst) {
@@ -75,6 +116,16 @@ pub fn spawn_mlx_install(app: AppHandle) {
             Ok(()) => {
                 refresh_mlx_python();
                 tracing::info!("Parakeet MLX runtime is ready");
+                if crate::hardware::mlx_acceleration_allowed() {
+                    // The fp16 worker now serves transcription; drop the
+                    // int8 ONNX weights instead of keeping both resident.
+                    clear_cache();
+                    tauri::async_runtime::spawn_blocking(|| {
+                        if preload_worker() {
+                            tracing::info!("Parakeet MLX worker warmed after install");
+                        }
+                    });
+                }
                 let _ = app.emit("parakeet_mlx:ready", ());
             }
             Err(e) => {
@@ -257,42 +308,276 @@ fn write_silent_wav(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A worker process with the fp16 model resident. One Python interpreter
+/// serves every transcription until it idles out or dies; requests are
+/// serialized through WORKER like the ONNX model mutex is.
+struct MlxWorker {
+    child: Child,
+    stdin: ChildStdin,
+    messages: mpsc::Receiver<WorkerMessage>,
+    last_used: Instant,
+}
+#[derive(Debug, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+enum WorkerEvent {
+    Ready,
+    Progress {
+        done: u64,
+        total: u64,
+    },
+    Result {
+        ok: bool,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        error: String,
+    },
+}
+
+enum WorkerMessage {
+    Event(WorkerEvent),
+    Eof,
+}
+
+/// Generous upper bound per request: MLX RTF on supported Macs stays well
+/// below 0.5 even on M1, and the floor covers first-run Metal shader
+/// compilation. Hitting it means the worker hung; it gets killed and retried.
+fn worker_request_budget(audio_seconds: f64) -> Duration {
+    Duration::from_secs_f64((audio_seconds * 0.5 + 120.0).max(150.0))
+}
+
+impl MlxWorker {
+    fn spawn(python: &Path, hf_home: Option<&Path>) -> Result<Self> {
+        let mut command = Command::new(python);
+        if let Some(cache) = hf_home {
+            command.env("HF_HOME", cache);
+        }
+        let mut child = command
+            .env("HF_HUB_DISABLE_TELEMETRY", "1")
+            .env("PYTHONIOENCODING", "utf-8")
+            .arg("-c")
+            .arg(MLX_WORKER_SCRIPT)
+            .arg(MLX_MODEL)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| "failed to spawn parakeet-mlx worker")?;
+
+        let stdin = child.stdin.take().context("worker stdin missing")?;
+        let stdout: ChildStdout = child.stdout.take().context("worker stdout missing")?;
+        let stderr = child.stderr.take().context("worker stderr missing")?;
+
+        // Surface worker-side tracebacks in the app log instead of dropping them.
+        std::thread::spawn(move || {
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                if !line.trim().is_empty() {
+                    tracing::warn!("parakeet-mlx worker: {line}");
+                }
+            }
+        });
+
+        let (tx, rx) = mpsc::channel::<WorkerMessage>();
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stdout);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                match serde_json::from_str::<WorkerEvent>(line.trim()) {
+                    Ok(event) => {
+                        if tx.send(WorkerMessage::Event(event)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => tracing::warn!("parakeet-mlx: ignoring unparsable line: {e}"),
+                }
+            }
+            let _ = tx.send(WorkerMessage::Eof);
+        });
+
+        let mut worker = Self {
+            child,
+            stdin,
+            messages: rx,
+            last_used: Instant::now(),
+        };
+        worker.wait_ready()?;
+        Ok(worker)
+    }
+
+    fn wait_ready(&mut self) -> Result<()> {
+        let deadline = Instant::now() + WORKER_READY_TIMEOUT;
+        loop {
+            match self.next_event(deadline)? {
+                WorkerEvent::Ready => return Ok(()),
+                WorkerEvent::Progress { .. } => {}
+                WorkerEvent::Result { error, .. } => {
+                    anyhow::bail!("worker failed before becoming ready: {error}");
+                }
+            }
+        }
+    }
+
+    fn next_event(&mut self, deadline: Instant) -> Result<WorkerEvent> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match self.messages.recv_timeout(remaining) {
+            Ok(WorkerMessage::Event(event)) => Ok(event),
+            Ok(WorkerMessage::Eof) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.child.wait().ok();
+                anyhow::bail!("parakeet-mlx worker exited unexpectedly")
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                anyhow::bail!("parakeet-mlx worker timed out after {remaining:?}")
+            }
+        }
+    }
+
+    fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    fn request(
+        &mut self,
+        wav_path: &Path,
+        audio_seconds: f64,
+        progress_cb: &impl Fn(u32),
+    ) -> Result<String> {
+        while self.messages.try_recv().is_ok() {
+            // Drop events from an aborted previous request, if any.
+        }
+        self.stdin
+            .write_all(format!("{}\n", wav_path.display()).as_bytes())?;
+        self.stdin.flush()?;
+        self.last_used = Instant::now();
+
+        let deadline = Instant::now() + worker_request_budget(audio_seconds);
+        loop {
+            match self.next_event(deadline)? {
+                WorkerEvent::Ready => {}
+                WorkerEvent::Progress { done, total } => {
+                    if total > 0 {
+                        let pct =
+                            ((done as f64 / total as f64) * 90.0 + 5.0).clamp(5.0, 99.0) as u32;
+                        progress_cb(pct);
+                    }
+                }
+                WorkerEvent::Result { ok, text, error } => {
+                    self.last_used = Instant::now();
+                    if ok {
+                        return Ok(text);
+                    }
+                    anyhow::bail!("parakeet-mlx transcription error: {error}");
+                }
+            }
+        }
+    }
+
+    fn kill(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+static WORKER: Mutex<Option<MlxWorker>> = Mutex::new(None);
+
+const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(300);
+const WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
 fn transcribe_with_mlx(
     python: &Path,
     wav_path: &Path,
     progress_cb: &impl Fn(u32),
 ) -> Result<String> {
     progress_cb(5);
-    let mut command = Command::new(python);
-    if let Some(cache) = mlx_hf_home() {
-        command.env("HF_HOME", cache);
+    let audio_seconds = hound::WavReader::open(wav_path).map_or(0.0, |r| {
+        r.duration() as f64 / f64::from(r.spec().sample_rate)
+    });
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..2 {
+        let mut guard = WORKER.lock();
+        let stale = guard
+            .as_mut()
+            .map(|w| w.last_used.elapsed() > WORKER_IDLE_TIMEOUT || !w.alive())
+            .unwrap_or(false);
+        if stale {
+            if let Some(dead) = guard.take() {
+                dead.kill();
+            }
+        }
+        if guard.is_none() {
+            match MlxWorker::spawn(python, mlx_hf_home().as_deref()) {
+                Ok(worker) => *guard = Some(worker),
+                Err(e) => {
+                    if attempt == 0 {
+                        tracing::warn!("parakeet-mlx worker spawn failed, retrying once: {e:#}");
+                        last_err = Some(e);
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        let result =
+            guard
+                .as_mut()
+                .expect("worker present")
+                .request(wav_path, audio_seconds, progress_cb);
+        match result {
+            Ok(text) => {
+                progress_cb(100);
+                return Ok(text);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "parakeet-mlx worker request failed ({e:#}); restarting worker and retrying"
+                );
+                if let Some(dead) = guard.take() {
+                    dead.kill();
+                }
+                last_err = Some(e);
+            }
+        }
     }
-    let output = command
-        .env("HF_HUB_DISABLE_TELEMETRY", "1")
-        .arg("-c")
-        .arg(MLX_TRANSCRIBE_SCRIPT)
-        .arg(MLX_MODEL)
-        .arg(wav_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()?;
-    if !output.status.success() {
-        let tail = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "parakeet-mlx failed: {}",
-            tail.trim()
-                .lines()
-                .rev()
-                .take(8)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
+    Err(last_err.unwrap_or_else(|| anyhow!("parakeet-mlx worker failed")))
+}
+
+/// Spawn the warm worker now so the next job skips model load entirely.
+/// Returns true when a healthy worker is resident.
+pub fn preload_worker() -> bool {
+    if !crate::hardware::mlx_acceleration_allowed() {
+        return false;
     }
-    progress_cb(100);
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let Some(python) = current_mlx_python() else {
+        return false;
+    };
+    let mut guard = WORKER.lock();
+    if let Some(worker) = guard.as_mut() {
+        if worker.alive() && worker.last_used.elapsed() <= WORKER_IDLE_TIMEOUT {
+            return true;
+        }
+    }
+    match MlxWorker::spawn(&python, mlx_hf_home().as_deref()) {
+        Ok(worker) => {
+            *guard = Some(worker);
+            true
+        }
+        Err(e) => {
+            tracing::warn!("parakeet-mlx worker warmup failed: {e:#}");
+            false
+        }
+    }
+}
+
+/// Stop the warm worker and release its ~1.5 GB of memory.
+pub fn stop_worker() {
+    if let Some(worker) = WORKER.lock().take() {
+        worker.kill();
+    }
 }
 
 pub fn transcribe_wav(
@@ -300,11 +585,13 @@ pub fn transcribe_wav(
     wav_path: &Path,
     progress_cb: impl Fn(u32) + Send + Sync,
 ) -> Result<String> {
-    if let Some(python) = current_mlx_python() {
-        match transcribe_with_mlx(&python, wav_path, &progress_cb) {
-            Ok(text) if !text.is_empty() => return Ok(text),
-            Ok(_) => tracing::warn!("parakeet-mlx returned empty text, falling back to ONNX"),
-            Err(e) => tracing::warn!("parakeet-mlx failed, falling back to ONNX: {e:#}"),
+    if crate::hardware::mlx_acceleration_allowed() {
+        if let Some(python) = current_mlx_python() {
+            match transcribe_with_mlx(&python, wav_path, &progress_cb) {
+                Ok(text) if !text.is_empty() => return Ok(text),
+                Ok(_) => tracing::warn!("parakeet-mlx returned empty text, falling back to ONNX"),
+                Err(e) => tracing::warn!("parakeet-mlx failed, falling back to ONNX: {e:#}"),
+            }
         }
     }
 
@@ -571,6 +858,57 @@ mod tests {
     }
 
     #[test]
+    fn worker_events_parse_from_json_lines() {
+        let ready: WorkerEvent = serde_json::from_str(r#"{"event":"ready"}"#).expect("parse ready");
+        assert!(matches!(ready, WorkerEvent::Ready));
+
+        let progress: WorkerEvent =
+            serde_json::from_str(r#"{"event":"progress","done":480000,"total":960000}"#)
+                .expect("parse progress");
+        assert!(matches!(
+            progress,
+            WorkerEvent::Progress {
+                done: 480000,
+                total: 960000
+            }
+        ));
+
+        let ok: WorkerEvent = serde_json::from_str(
+            r#"{"event":"result","ok":true,"text":"привет мир\nвторая строка"}"#,
+        )
+        .expect("parse result");
+        match ok {
+            WorkerEvent::Result {
+                ok: true,
+                text,
+                error,
+            } => {
+                assert_eq!(text, "привет мир\nвторая строка");
+                assert!(error.is_empty());
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let err: WorkerEvent =
+            serde_json::from_str(r#"{"event":"result","ok":false,"error":"boom"}"#)
+                .expect("parse failure result");
+        match err {
+            WorkerEvent::Result {
+                ok: false, error, ..
+            } => assert_eq!(error, "boom"),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn worker_request_budget_scales_with_audio() {
+        // Short clips get a floor covering Metal shader compilation.
+        assert_eq!(worker_request_budget(0.0), Duration::from_secs_f64(150.0));
+        // Long files stay well under the 0.5x RTF ceiling on supported Macs.
+        assert_eq!(worker_request_budget(600.0), Duration::from_secs_f64(420.0));
+    }
+
+    #[test]
     #[ignore = "manual performance guard: run with `cargo test --release bench_read_wav_samples -- --ignored --nocapture`"]
     fn bench_read_wav_samples() {
         let path = std::env::temp_dir().join(format!(
@@ -596,6 +934,40 @@ mod tests {
             "parakeet wav read benchmark: {iterations} iterations, {total_samples} samples, {:.3}s total, {:.3}s/iter",
             elapsed.as_secs_f64(),
             elapsed.as_secs_f64() / iterations as f64
+        );
+    }
+
+    #[test]
+    #[ignore = "manual performance guard: run with `cargo test --release bench_transcribe_mlx_warm -- --ignored --nocapture`"]
+    fn bench_transcribe_mlx_warm() {
+        let Some(wav) = std::env::var_os("PARROT_TRANSCRIBE_BENCH_WAV") else {
+            eprintln!("set PARROT_TRANSCRIBE_BENCH_WAV to run this benchmark");
+            return;
+        };
+        let Some(python) = current_mlx_python() else {
+            eprintln!("parakeet-mlx python is not available; skipping benchmark");
+            return;
+        };
+        let wav = std::path::PathBuf::from(wav);
+        let audio_seconds = hound::WavReader::open(&wav)
+            .map(|r| r.duration() as f64 / f64::from(r.spec().sample_rate))
+            .expect("read bench wav header");
+
+        let cold_started = Instant::now();
+        let cold = transcribe_with_mlx(&python, &wav, &|_| {}).expect("cold mlx transcription");
+        let cold_elapsed = cold_started.elapsed();
+
+        let warm_started = Instant::now();
+        let warm = transcribe_with_mlx(&python, &wav, &|_| {}).expect("warm mlx transcription");
+        let warm_elapsed = warm_started.elapsed();
+
+        println!(
+            "PARROT_BENCH engine=parakeet-mlx audio={audio_seconds:.1}s cold={:.3}s warm={:.3}s warm_rtf={:.2}x chars_cold={} chars_warm={}",
+            cold_elapsed.as_secs_f64(),
+            warm_elapsed.as_secs_f64(),
+            audio_seconds / warm_elapsed.as_secs_f64(),
+            cold.len(),
+            warm.len(),
         );
     }
 
