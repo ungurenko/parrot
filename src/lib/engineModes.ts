@@ -30,6 +30,15 @@ export const ENGINE_MODES: EngineModeOption[] = [
     primary: true,
   },
   {
+    id: "manyLanguages",
+    engine: "whisper",
+    title: "Много языков",
+    subtitle: "Для английского, европейских и редких языков",
+    detail: "Медленнее, зато уверенно работает с большим числом языков.",
+    technicalName: ENGINE_LABEL.whisper,
+    size: ENGINE_SIZE.whisper,
+  },
+  {
     id: "russian",
     engine: "qwen-0.6b",
     title: "Лучше для русского",
@@ -47,15 +56,6 @@ export const ENGINE_MODES: EngineModeOption[] = [
     technicalName: ENGINE_LABEL["qwen-1.7b"],
     size: ENGINE_SIZE["qwen-1.7b"],
     badge: "качество",
-  },
-  {
-    id: "manyLanguages",
-    engine: "whisper",
-    title: "Много языков",
-    subtitle: "Для английского, европейских и редких языков",
-    detail: "Медленнее, зато уверенно работает с большим числом языков.",
-    technicalName: ENGINE_LABEL.whisper,
-    size: ENGINE_SIZE.whisper,
   },
 ];
 

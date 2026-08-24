@@ -65,7 +65,7 @@ export interface ModelProgressDetail {
   speed_bytes_per_sec: number;
 }
 
-export type ModelStage = "downloading" | "warmup" | "ready";
+export type ModelStage = "installing" | "downloading" | "warmup" | "ready";
 
 export type TranscriptLanguage =
   | "auto"

@@ -1,6 +1,6 @@
 [package]
 name = "parrot"
-version = "0.4.24"
+version = "0.4.25"
 description = "Local audio/video/YouTube transcription for macOS"
 authors = ["Alexander Ungurenko"]
 edition = "2021"

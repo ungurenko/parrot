@@ -101,6 +101,11 @@ fn set_settings(
                 .to_string(),
         );
     }
+    if old.engine != new.engine && !commands::models::is_model_ready_for_engine(&app, &new.engine) {
+        return Err(
+            "Сначала скачайте и подготовьте выбранную модель, затем выберите её.".to_string(),
+        );
+    }
     if old.dictation_enabled != new.dictation_enabled
         || old.dictation_hold_key != new.dictation_hold_key
     {
@@ -208,13 +213,7 @@ pub(crate) fn preload_active_engine(handle: AppHandle) {
             }
             "whisper" => {
                 transcriber_qwen::stop_server();
-                let main_ok = paths::model_path(&handle)
-                    .map(|p| p.exists())
-                    .unwrap_or(false);
-                let coreml_ok = paths::coreml_encoder_path(&handle)
-                    .map(|p| p.exists())
-                    .unwrap_or(false);
-                if main_ok && coreml_ok {
+                if paths::whisper_files_ready(&handle) {
                     if let Ok(p) = paths::model_path(&handle) {
                         tracing::info!("Preloading Whisper + Core ML…");
                         match transcriber::preload(&p) {

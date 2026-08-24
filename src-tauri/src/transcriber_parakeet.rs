@@ -179,7 +179,14 @@ fn write_mlx_ready_marker(cache_dir: &Path) -> Result<()> {
 }
 
 fn install_mlx_runtime(app: &AppHandle, on_progress: impl Fn(&str) + Send + Sync) -> Result<()> {
-    let venv_python = crate::mlx_env::ensure_user_python_venv(app, &on_progress)?;
+    crate::mlx_env::with_install_lock(|| install_mlx_runtime_locked(app, &on_progress))
+}
+
+fn install_mlx_runtime_locked(
+    app: &AppHandle,
+    on_progress: &(impl Fn(&str) + Send + Sync),
+) -> Result<()> {
+    let venv_python = crate::mlx_env::ensure_user_python_venv(app, on_progress)?;
     if mlx_python_has_package(&venv_python) {
         if let Ok(cache) = crate::paths::qwen_cache_dir(app) {
             if mlx_ready_marker_exists(&cache) {

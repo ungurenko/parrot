@@ -25,11 +25,21 @@ const WHISPER_MAIN_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
 const WHISPER_COREML_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-encoder.mlmodelc.zip";
-const WHISPER_MAIN_MIN_BYTES: u64 = 100 * 1024 * 1024;
+const WHISPER_MAIN_MIN_BYTES: u64 = 500 * 1024 * 1024;
+const COREML_METADATA_MIN_BYTES: u64 = 1024;
+const COREML_MODEL_MIL_MIN_BYTES: u64 = 1024 * 1024;
+const COREML_DATA_MIN_BYTES: u64 = 100;
+const COREML_WEIGHTS_MIN_BYTES: u64 = 1_000_000_000;
 
 // Parakeet v3 ONNX model URLs (istupakov/parakeet-tdt-0.6b-v3-onnx)
 const PARAKEET_BASE: &str =
     "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
+const PARAKEET_VOCAB_MIN_BYTES: u64 = 80 * 1024;
+const PARAKEET_INT8_DECODER_MIN_BYTES: u64 = 16 * 1024 * 1024;
+const PARAKEET_INT8_ENCODER_MIN_BYTES: u64 = 550 * 1024 * 1024;
+const PARAKEET_FP32_DECODER_MIN_BYTES: u64 = 60 * 1024 * 1024;
+const PARAKEET_FP32_ENCODER_MIN_BYTES: u64 = 35 * 1024 * 1024;
+const PARAKEET_FP32_ENCODER_DATA_MIN_BYTES: u64 = 2_000_000_000;
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -51,7 +61,7 @@ pub async fn download_whisper(
     }
 
     ensure_not_cancelled(cancel)?;
-    if !dir_has_content(coreml_dest) {
+    if !coreml_bundle_ready(coreml_dest) {
         let _ = tokio::fs::remove_dir_all(coreml_dest).await;
         let models_dir = coreml_dest
             .parent()
@@ -84,6 +94,12 @@ pub async fn download_whisper(
         let _ = tokio::fs::remove_file(&zip_path).await;
     }
 
+    if !whisper_files_ready(main_dest, coreml_dest) {
+        return Err(anyhow!(
+            "Скачанные файлы Whisper неполны или повреждены. Попробуйте скачать модель ещё раз."
+        ));
+    }
+
     let _ = app.emit("model:progress", 100u32);
     Ok(())
 }
@@ -94,9 +110,19 @@ pub async fn download_parakeet(app: AppHandle, dir: &Path, cancel: &CancelToken)
     // Download int8 variant — ~3× smaller than fp32 and ~2× faster inference.
     // parakeet-rs auto-discovers these filenames alongside the fp32 variant.
     let files: [(&str, u64, u32, u32); 3] = [
-        ("vocab.txt", 100, 0, 1),
-        ("decoder_joint-model.int8.onnx", 1024 * 1024, 1, 5),
-        ("encoder-model.int8.onnx", 100 * 1024 * 1024, 5, 100),
+        ("vocab.txt", PARAKEET_VOCAB_MIN_BYTES, 0, 1),
+        (
+            "decoder_joint-model.int8.onnx",
+            PARAKEET_INT8_DECODER_MIN_BYTES,
+            1,
+            5,
+        ),
+        (
+            "encoder-model.int8.onnx",
+            PARAKEET_INT8_ENCODER_MIN_BYTES,
+            5,
+            100,
+        ),
     ];
 
     for (name, min_bytes, start, end) in files {
@@ -109,6 +135,12 @@ pub async fn download_parakeet(app: AppHandle, dir: &Path, cancel: &CancelToken)
         let _ = tokio::fs::remove_file(&dest).await;
         let url = format!("{PARAKEET_BASE}/{name}");
         download_with_progress(&app, &url, &dest, start, end, cancel).await?;
+    }
+
+    if !parakeet_files_ready(dir) {
+        return Err(anyhow!(
+            "Скачанные файлы Parakeet неполны или повреждены. Попробуйте скачать модель ещё раз."
+        ));
     }
 
     let _ = app.emit("model:progress", 100u32);
@@ -237,19 +269,64 @@ fn file_len_at_least(path: &Path, min_bytes: u64) -> bool {
         .unwrap_or(false)
 }
 
-fn dir_has_content(path: &Path) -> bool {
+pub(crate) fn whisper_files_ready(main_path: &Path, coreml_path: &Path) -> bool {
+    file_len_at_least(main_path, WHISPER_MAIN_MIN_BYTES) && coreml_bundle_ready(coreml_path)
+}
+
+fn coreml_bundle_ready(path: &Path) -> bool {
     path.is_dir()
-        && std::fs::read_dir(path)
-            .map(|mut entries| entries.next().is_some())
-            .unwrap_or(false)
+        && file_len_at_least(&path.join("metadata.json"), COREML_METADATA_MIN_BYTES)
+        && file_len_at_least(&path.join("model.mil"), COREML_MODEL_MIL_MIN_BYTES)
+        && file_len_at_least(&path.join("coremldata.bin"), COREML_DATA_MIN_BYTES)
+        && file_len_at_least(&path.join("weights/weight.bin"), COREML_WEIGHTS_MIN_BYTES)
+}
+
+pub(crate) fn parakeet_files_ready(dir: &Path) -> bool {
+    if !file_len_at_least(&dir.join("vocab.txt"), PARAKEET_VOCAB_MIN_BYTES) {
+        return false;
+    }
+
+    let int8_ready = file_len_at_least(
+        &dir.join("encoder-model.int8.onnx"),
+        PARAKEET_INT8_ENCODER_MIN_BYTES,
+    ) && file_len_at_least(
+        &dir.join("decoder_joint-model.int8.onnx"),
+        PARAKEET_INT8_DECODER_MIN_BYTES,
+    );
+    let fp32_ready = file_len_at_least(
+        &dir.join("encoder-model.onnx"),
+        PARAKEET_FP32_ENCODER_MIN_BYTES,
+    ) && file_len_at_least(
+        &dir.join("encoder-model.onnx.data"),
+        PARAKEET_FP32_ENCODER_DATA_MIN_BYTES,
+    ) && file_len_at_least(
+        &dir.join("decoder_joint-model.onnx"),
+        PARAKEET_FP32_DECODER_MIN_BYTES,
+    );
+    int8_ready || fp32_ready
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::OpenOptions;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("parrot-model-test-{}-{}", name, std::process::id()))
+    }
+
+    fn write_sparse(path: &Path, len: u64) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create fixture parent");
+        }
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .expect("create sparse fixture")
+            .set_len(len)
+            .expect("size sparse fixture");
     }
 
     #[test]
@@ -264,13 +341,45 @@ mod tests {
     }
 
     #[test]
-    fn dir_has_content_should_reject_empty_dirs() {
-        let path = temp_path("empty-dir");
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("create temp dir");
+    fn whisper_readiness_requires_complete_model_and_coreml_bundle() {
+        let dir = temp_path("whisper-ready");
+        let main = dir.join("model.bin");
+        let coreml = dir.join("encoder.mlmodelc");
+        let _ = std::fs::remove_dir_all(&dir);
 
-        assert!(!dir_has_content(&path));
+        write_sparse(&main, WHISPER_MAIN_MIN_BYTES);
+        std::fs::create_dir_all(&coreml).expect("create non-empty CoreML dir");
+        std::fs::write(coreml.join("placeholder"), b"not a model").expect("write placeholder");
+        assert!(!whisper_files_ready(&main, &coreml));
 
-        let _ = std::fs::remove_dir_all(&path);
+        write_sparse(&coreml.join("metadata.json"), COREML_METADATA_MIN_BYTES);
+        write_sparse(&coreml.join("model.mil"), COREML_MODEL_MIL_MIN_BYTES);
+        write_sparse(&coreml.join("coremldata.bin"), COREML_DATA_MIN_BYTES);
+        write_sparse(&coreml.join("weights/weight.bin"), COREML_WEIGHTS_MIN_BYTES);
+        assert!(whisper_files_ready(&main, &coreml));
+
+        write_sparse(&main, 1);
+        assert!(!whisper_files_ready(&main, &coreml));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parakeet_readiness_rejects_truncated_final_files() {
+        let dir = temp_path("parakeet-ready");
+        let _ = std::fs::remove_dir_all(&dir);
+        write_sparse(&dir.join("vocab.txt"), PARAKEET_VOCAB_MIN_BYTES);
+        write_sparse(
+            &dir.join("decoder_joint-model.int8.onnx"),
+            PARAKEET_INT8_DECODER_MIN_BYTES,
+        );
+        write_sparse(
+            &dir.join("encoder-model.int8.onnx"),
+            PARAKEET_INT8_ENCODER_MIN_BYTES,
+        );
+        assert!(parakeet_files_ready(&dir));
+
+        write_sparse(&dir.join("encoder-model.int8.onnx"), 1024);
+        assert!(!parakeet_files_ready(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

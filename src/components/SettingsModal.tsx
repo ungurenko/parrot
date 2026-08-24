@@ -1,4 +1,9 @@
-import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { toast } from "sonner";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
@@ -163,6 +168,7 @@ interface ModelSettingsSectionProps {
   settings: Settings;
   modelStatuses: EngineStatuses;
   busyEngine: Engine | null;
+  failedEngine: Engine | null;
   deletingEngine: Engine | null;
   modelProgress: number;
   modelProgressDetail: ModelProgressDetail | null;
@@ -177,6 +183,7 @@ function ModelSettingsSection({
   settings,
   modelStatuses,
   busyEngine,
+  failedEngine,
   deletingEngine,
   modelProgress,
   modelProgressDetail,
@@ -194,6 +201,7 @@ function ModelSettingsSection({
           value={settings.engine}
           statuses={modelStatuses}
           busyEngine={busyEngine}
+          failedEngine={failedEngine}
           deletingEngine={deletingEngine}
           progress={modelProgress}
           progressDetail={modelProgressDetail}
@@ -765,6 +773,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const [appVersion, setAppVersion] = useState("");
   const [modelStatuses, setModelStatuses] = useState<EngineStatuses>({});
   const [busyEngine, setBusyEngine] = useState<Engine | null>(null);
+  const [failedEngine, setFailedEngine] = useState<Engine | null>(null);
   const [deletingEngine, setDeletingEngine] = useState<Engine | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [modelProgress, setModelProgress] = useState(0);
@@ -783,13 +792,20 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const [shortcutHint, setShortcutHint] = useState<string | null>(null);
   const [accessibilityPermission, setAccessibilityPermission] =
     useState<AccessibilityPermissionState>("checking");
+  const settingsRef = useRef<Settings | null>(null);
 
-  const refreshModelStatuses = () => {
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  const refreshModelStatuses = async (): Promise<EngineStatuses> => {
     if (!isTauriRuntime()) {
       setModelStatuses(PREVIEW_ENGINE_STATUSES);
-      return Promise.resolve();
+      return PREVIEW_ENGINE_STATUSES;
     }
-    return invoke<EngineStatuses>("get_engine_statuses").then(setModelStatuses);
+    const nextStatuses = await invoke<EngineStatuses>("get_engine_statuses");
+    setModelStatuses(nextStatuses);
+    return nextStatuses;
   };
   const refreshSummarizerStatus = () => {
     if (!isTauriRuntime()) {
@@ -850,12 +866,14 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   const saveSettings = async (next: Settings): Promise<boolean> => {
     if (previewMode) {
       setSettings(next);
+      settingsRef.current = next;
       setSettingsError(null);
       return true;
     }
     try {
       await invoke("set_settings", { new: next });
       setSettings(next);
+      settingsRef.current = next;
       setSettingsError(null);
       return true;
     } catch (e: unknown) {
@@ -874,8 +892,15 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
 
   const changeEngine = async (engine: Engine) => {
     if (!settings) return;
+    if (engine === settings.engine) return;
     if (engine !== settings.engine && hasActiveJob) {
       setSettingsError(ACTIVE_JOB_HINT);
+      return;
+    }
+    if (!modelStatuses[engine]?.modelReady) {
+      setSettingsError(
+        "Сначала скачайте модель. После загрузки Parrot выберет её автоматически.",
+      );
       return;
     }
     const next = { ...settings, engine };
@@ -895,14 +920,25 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
   };
 
   const prepareModel = async (engine: Engine) => {
+    if (hasActiveJob) {
+      setSettingsError(ACTIVE_JOB_HINT);
+      return;
+    }
     if (previewMode) {
-      setModelStatuses((prev) => ({
-        ...prev,
+      const nextStatuses: EngineStatuses = {
+        ...modelStatuses,
         [engine]: { available: true, modelReady: true },
-      }));
+      };
+      setModelStatuses(nextStatuses);
+      setFailedEngine(null);
+      const currentSettings = settingsRef.current;
+      if (currentSettings) {
+        await saveSettings({ ...currentSettings, engine });
+      }
       return;
     }
     setBusyEngine(engine);
+    setFailedEngine(null);
     setSettingsError(null);
     setModelProgress(1);
     setModelProgressDetail(null);
@@ -910,8 +946,19 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
     try {
       await invoke("download_model_for_engine", { engine });
       setModelProgress(100);
-      await refreshModelStatuses();
+      const nextStatuses = await refreshModelStatuses();
+      if (!nextStatuses[engine]?.modelReady) {
+        throw new Error(
+          "Модель не прошла итоговую проверку после скачивания. Попробуйте ещё раз.",
+        );
+      }
+      const currentSettings = settingsRef.current;
+      if (!currentSettings) return;
+      if (await saveSettings({ ...currentSettings, engine })) {
+        toast.success("Модель скачана и выбрана");
+      }
     } catch (e: unknown) {
+      setFailedEngine(engine);
       setSettingsError(formatErrorDescription(e));
     } finally {
       setBusyEngine(null);
@@ -934,6 +981,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
         ...prev,
         [engine]: { ...(prev[engine] ?? { available: true }), modelReady: false },
       }));
+      setFailedEngine(null);
       return;
     }
 
@@ -942,6 +990,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
     try {
       await invoke("delete_model_for_engine", { engine });
       await refreshModelStatuses();
+      setFailedEngine(null);
       setModelProgress(0);
       setModelProgressDetail(null);
       toast.success("Модель удалена");
@@ -1216,6 +1265,7 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
                 settings={settings}
                 modelStatuses={modelStatuses}
                 busyEngine={busyEngine}
+                failedEngine={failedEngine}
                 deletingEngine={deletingEngine}
                 modelProgress={modelProgress}
                 modelProgressDetail={modelProgressDetail}

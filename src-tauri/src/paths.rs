@@ -2,6 +2,8 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
+use crate::model;
+
 const LEGACY_IDENTIFIER: &str = "com.alexk.audiototext";
 
 pub fn app_data_dir(app: &AppHandle) -> Result<PathBuf> {
@@ -79,22 +81,14 @@ pub fn parakeet_files_ready(app: &AppHandle) -> bool {
     let Ok(dir) = parakeet_dir(app) else {
         return false;
     };
-    if !file_has_content(&dir.join("vocab.txt")) {
-        return false;
-    }
-    // Accept either the int8 variant (faster, default) or the fp32 variant.
-    let has_encoder = file_has_content(&dir.join("encoder-model.int8.onnx"))
-        || (file_has_content(&dir.join("encoder-model.onnx"))
-            && file_has_content(&dir.join("encoder-model.onnx.data")));
-    let has_decoder = file_has_content(&dir.join("decoder_joint-model.int8.onnx"))
-        || file_has_content(&dir.join("decoder_joint-model.onnx"));
-    has_encoder && has_decoder
+    model::parakeet_files_ready(&dir)
 }
 
-fn file_has_content(path: &Path) -> bool {
-    path.metadata()
-        .map(|m| m.is_file() && m.len() > 0)
-        .unwrap_or(false)
+pub fn whisper_files_ready(app: &AppHandle) -> bool {
+    let (Ok(main), Ok(coreml)) = (model_path(app), coreml_encoder_path(app)) else {
+        return false;
+    };
+    model::whisper_files_ready(&main, &coreml)
 }
 
 pub fn settings_path(app: &AppHandle) -> Result<PathBuf> {

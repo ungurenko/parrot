@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -8,6 +9,15 @@ if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
 }
 
 const root = resolve(import.meta.dirname, "..");
+
+const versionCheck = spawnSync("node", ["tools/check_release_versions.mjs"], {
+  cwd: root,
+  stdio: "inherit",
+});
+if (versionCheck.status !== 0) {
+  process.exit(versionCheck.status ?? 1);
+}
+
 const tauriConfig = JSON.parse(
   await readFile(resolve(root, "src-tauri/tauri.conf.json"), "utf8"),
 );

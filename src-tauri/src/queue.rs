@@ -563,11 +563,7 @@ pub(crate) fn ensure_model_ready(app: &AppHandle, engine: &str) -> Result<()> {
             }
         }
         "whisper" => {
-            let model = paths::model_path(app)?;
-            let coreml_ready = paths::coreml_encoder_path(app)
-                .map(|p| p.exists())
-                .unwrap_or(false);
-            if !model.exists() || !coreml_ready {
+            if !paths::whisper_files_ready(app) {
                 anyhow::bail!(
                     "Модель Whisper не скачана. Откройте настройки и нажмите «Скачать модель»."
                 );

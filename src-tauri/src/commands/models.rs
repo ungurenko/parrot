@@ -50,13 +50,7 @@ fn engine_unavailable_reason(_app: &AppHandle, engine: &str) -> Option<String> {
 pub(crate) fn is_model_ready_for_engine(app: &AppHandle, engine: &str) -> bool {
     match engine {
         "parakeet" => paths::parakeet_files_ready(app),
-        "whisper" => {
-            let main = paths::model_path(app).map(|p| p.exists()).unwrap_or(false);
-            let coreml = paths::coreml_encoder_path(app)
-                .map(|p| p.exists())
-                .unwrap_or(false);
-            main && coreml
-        }
+        "whisper" => paths::whisper_files_ready(app),
         engine if transcriber_qwen::is_qwen_engine(engine) => {
             transcriber_qwen::is_ready(app, engine)
         }
@@ -109,13 +103,32 @@ async fn download_model_inner(
                 .map_err(|e| e.to_string())?;
         }
         engine if transcriber_qwen::is_qwen_engine(engine) => {
+            if let Some(reason) = transcriber_qwen::unavailable_reason() {
+                return Err(reason);
+            }
+            let _ = app.emit("model:progress", 0u32);
+            let _ = app.emit("model:stage", "installing");
+            let app_for_install = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                transcriber_qwen::install_runtime(&app_for_install, |line| {
+                    tracing::info!("Qwen runtime install: {line}");
+                })
+            })
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+            if token.is_cancelled() {
+                return Err("cancelled".to_string());
+            }
+
             let expected_bytes = transcriber_qwen::expected_bytes_for_engine(engine)
                 .ok_or_else(|| format!("Неизвестная Qwen-модель: {engine}"))?;
             let _ = app.emit("model:progress", 1u32);
             let _ = app.emit("model:stage", "downloading");
             let engine_str = engine.to_string();
             let app_for_task = app.clone();
-            let cache_dir = paths::qwen_cache_dir(&app).map_err(|e| e.to_string())?;
+            let cache_dir =
+                transcriber_qwen::model_cache_dir(&app, engine).map_err(|e| e.to_string())?;
 
             let poll_handle = spawn_model_progress_poller(
                 app.clone(),

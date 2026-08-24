@@ -3,6 +3,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::env;
+use std::ffi::OsString;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -12,7 +13,7 @@ use tauri::AppHandle;
 
 use crate::cancellation::CancelToken;
 use crate::fs_metrics::dir_size_bytes;
-use crate::paths;
+use crate::{mlx_env, paths};
 
 pub const ENGINE_QWEN_0_6B: &str = "qwen-0.6b";
 pub const ENGINE_QWEN_1_7B: &str = "qwen-1.7b";
@@ -24,11 +25,22 @@ const SERVER_API_KEY: &str = "parrot-local-qwen";
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(90);
 const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const READY_MARKER_PREFIX: &str = ".parrot-ready";
+const RUNTIME_READY_MARKER: &str = ".parrot-ready-qwen-runtime-0.3.5-mlx-0.31.1";
+const QWEN_RUNTIME_PACKAGES: &[&str] = &["mlx==0.31.1", "mlx-qwen3-asr[serve]==0.3.5"];
+const QWEN_RUNTIME_CHECK: &str = r#"
+from importlib.metadata import version
+import fastapi
+import uvicorn
+import mlx
+import mlx_qwen3_asr
+assert version("mlx") == "0.31.1"
+assert version("mlx-qwen3-asr") == "0.3.5"
+"#;
 
 /// Expected cache size per model (safetensors + tokenizer + config).
 /// Used to detect incomplete downloads.
-pub const EXPECTED_QWEN_0_6B_BYTES: u64 = 1_100_000_000;
-pub const EXPECTED_QWEN_1_7B_BYTES: u64 = 3_300_000_000;
+pub const EXPECTED_QWEN_0_6B_BYTES: u64 = 1_880_619_678;
+pub const EXPECTED_QWEN_1_7B_BYTES: u64 = 4_703_114_308;
 
 static SERVER: Lazy<Mutex<Option<QwenServer>>> = Lazy::new(|| Mutex::new(None));
 static SERVER_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = Lazy::new(|| {
@@ -89,24 +101,179 @@ pub fn expected_bytes_for_engine(engine: &str) -> Option<u64> {
 }
 
 pub fn is_ready(app: &AppHandle, engine: &str) -> bool {
-    resolve_cli().is_ok() && model_cache_ready(app, engine)
+    runtime_ready_marker_exists(app) && resolve_cli(app).is_ok() && model_cache_ready(app, engine)
 }
 
 pub fn unavailable_reason() -> Option<String> {
-    if resolve_cli().is_ok() {
-        None
-    } else {
-        Some(
-            "Qwen MLX пока не установлен на этом Mac. Для стабильной версии используйте Parakeet или Whisper."
-                .to_string(),
-        )
+    let product_version = detected_macos_version();
+    qwen_platform_unavailable_reason(std::env::consts::ARCH, product_version.as_deref())
+}
+
+pub fn install_runtime<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -> Result<()> {
+    if let Some(reason) = unavailable_reason() {
+        anyhow::bail!(reason);
     }
+    mlx_env::with_install_lock(|| install_runtime_locked(app, &on_progress))
+}
+
+fn install_runtime_locked<F: Fn(&str) + Send + Sync>(
+    app: &AppHandle,
+    on_progress: &F,
+) -> Result<()> {
+    let venv_python = mlx_env::ensure_user_python_venv(app, on_progress)?;
+    let cli = paths::qwen_env_dir(app)?.join("bin/mlx-qwen3-asr");
+
+    if qwen_runtime_ready_at(&venv_python, &cli) {
+        write_runtime_ready_marker(app)?;
+        on_progress("Окружение Qwen уже готово");
+        return Ok(());
+    }
+
+    remove_runtime_ready_marker(app);
+    on_progress("Устанавливаю Qwen MLX…");
+    let output = Command::new(&venv_python)
+        .args([
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--upgrade",
+            "--force-reinstall",
+        ])
+        .args(QWEN_RUNTIME_PACKAGES)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Не удалось запустить pip install для Qwen MLX")?;
+    if !output.status.success() {
+        return Err(command_error(
+            "Не удалось установить Qwen MLX",
+            &output.stderr,
+            output.status.code(),
+        ));
+    }
+    if !qwen_runtime_ready_at(&venv_python, &cli) {
+        return Err(anyhow!(
+            "Qwen MLX установлен, но проверка окружения не прошла. Попробуйте повторить установку."
+        ));
+    }
+    write_runtime_ready_marker(app)?;
+    on_progress("Окружение Qwen готово");
+    Ok(())
+}
+
+fn runtime_ready_marker_path(app: &AppHandle) -> Result<PathBuf> {
+    let env_dir = paths::qwen_env_dir(app)?;
+    let root = env_dir
+        .parent()
+        .ok_or_else(|| anyhow!("Некорректный путь окружения Qwen"))?;
+    Ok(root.join(RUNTIME_READY_MARKER))
+}
+
+fn runtime_ready_marker_exists(app: &AppHandle) -> bool {
+    runtime_ready_marker_path(app)
+        .map(|path| path.is_file())
+        .unwrap_or(false)
+}
+
+fn write_runtime_ready_marker(app: &AppHandle) -> Result<()> {
+    let path = runtime_ready_marker_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, b"ok")?;
+    Ok(())
+}
+
+fn remove_runtime_ready_marker(app: &AppHandle) {
+    if let Ok(path) = runtime_ready_marker_path(app) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn qwen_runtime_ready_at(python: &Path, cli: &Path) -> bool {
+    if !python.is_file() || !cli.is_file() {
+        return false;
+    }
+    let imports_ready = Command::new(python)
+        .args(["-c", QWEN_RUNTIME_CHECK])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    imports_ready
+        && Command::new(cli)
+            .arg("--help")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+}
+
+pub fn model_cache_dir(app: &AppHandle, engine: &str) -> Result<PathBuf> {
+    let model =
+        model_for_engine(engine).ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
+    Ok(paths::qwen_cache_dir(app)?
+        .join("hub")
+        .join(format!("models--{}", model.replace('/', "--"))))
+}
+
+fn qwen_platform_unavailable_reason(
+    target_arch: &str,
+    product_version: Option<&str>,
+) -> Option<String> {
+    if target_arch != "aarch64" {
+        return Some("Qwen MLX доступен только на Mac с Apple Silicon.".to_string());
+    }
+
+    let Some(major) = product_version.and_then(parse_macos_major) else {
+        return Some(
+            "Не удалось определить версию macOS. Qwen MLX требует macOS 14 или новее.".to_string(),
+        );
+    };
+    if major < 14 {
+        return Some(
+            "Qwen MLX требует macOS 14 или новее. На этом Mac используйте Parakeet или Whisper."
+                .to_string(),
+        );
+    }
+    None
+}
+
+fn parse_macos_major(product_version: &str) -> Option<u32> {
+    product_version.trim().split('.').next()?.parse().ok()
+}
+
+#[cfg(target_os = "macos")]
+fn detected_macos_version() -> Option<String> {
+    let output = Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8(output.stdout).ok()?;
+    let version = version.trim();
+    (!version.is_empty()).then(|| version.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn detected_macos_version() -> Option<String> {
+    None
 }
 
 pub fn warmup_model(app: &AppHandle, engine: &str, cancel: Arc<CancelToken>) -> Result<()> {
     let model =
         model_for_engine(engine).ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
-    let cli = resolve_cli()?;
+    let cli = resolve_cli(app)?;
     let cache_dir = paths::qwen_cache_dir(app)?;
     let tmp = paths::tmp_dir(app)?;
     let warmup_wav = tmp.join(format!("qwen-warmup-{}.wav", engine.replace('.', "-")));
@@ -199,7 +366,7 @@ pub fn transcribe_wav(
         }
     }
 
-    let cli = resolve_cli()?;
+    let cli = resolve_cli(app)?;
     let cache_dir = paths::qwen_cache_dir(app)?;
 
     let mut command = qwen_command(&cli, &cache_dir);
@@ -292,7 +459,7 @@ fn ensure_server_locked(
 
     let model =
         model_for_engine(engine).ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
-    let cli = resolve_cli()?;
+    let cli = resolve_cli(app)?;
     let cache_dir = paths::qwen_cache_dir(app)?;
     let port = find_free_port()?;
 
@@ -477,12 +644,29 @@ fn ready_marker_path(cache_dir: &Path, engine: &str) -> Result<PathBuf> {
     )))
 }
 
-fn resolve_cli() -> Result<PathBuf> {
-    if let Some(path) =
-        env::var_os("PARROT_QWEN_BIN").or_else(|| env::var_os("AUDIO_TO_TEXT_QWEN_BIN"))
-    {
-        let path = PathBuf::from(path);
-        if path.exists() {
+fn resolve_cli(app: &AppHandle) -> Result<PathBuf> {
+    let explicit = env::var_os("PARROT_QWEN_BIN")
+        .or_else(|| env::var_os("AUDIO_TO_TEXT_QWEN_BIN"))
+        .map(PathBuf::from);
+    let app_venv_cli = paths::qwen_env_dir(app)
+        .ok()
+        .map(|dir| dir.join("bin/mlx-qwen3-asr"));
+    resolve_cli_from_candidates(
+        explicit,
+        app_venv_cli,
+        &candidate_roots(),
+        env::var_os("PATH"),
+    )
+}
+
+fn resolve_cli_from_candidates(
+    explicit: Option<PathBuf>,
+    app_venv_cli: Option<PathBuf>,
+    roots: &[PathBuf],
+    path_var: Option<OsString>,
+) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        if path.is_file() {
             return Ok(path);
         }
         return Err(anyhow!(
@@ -491,19 +675,23 @@ fn resolve_cli() -> Result<PathBuf> {
         ));
     }
 
-    for root in candidate_roots() {
+    if let Some(path) = app_venv_cli.filter(|path| path.is_file()) {
+        return Ok(path);
+    }
+
+    for root in roots {
         let path = root.join(".qwen-mlx/venv/bin/mlx-qwen3-asr");
-        if path.exists() {
+        if path.is_file() {
             return Ok(path);
         }
     }
 
-    if let Some(path) = find_in_path("mlx-qwen3-asr") {
+    if let Some(path) = find_in_path_var("mlx-qwen3-asr", path_var) {
         return Ok(path);
     }
 
     Err(anyhow!(
-        "Qwen MLX не установлен. Запустите tools/setup_qwen_mlx.sh или укажите PARROT_QWEN_BIN."
+        "Qwen MLX ещё не установлен. Откройте настройки и нажмите «Скачать и выбрать»."
     ))
 }
 
@@ -526,11 +714,11 @@ fn candidate_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn find_in_path(name: &str) -> Option<PathBuf> {
-    let path_var = env::var_os("PATH")?;
+fn find_in_path_var(name: &str, path_var: Option<OsString>) -> Option<PathBuf> {
+    let path_var = path_var?;
     env::split_paths(&path_var)
         .map(|part| part.join(name))
-        .find(|path| path.exists())
+        .find(|path| path.is_file())
 }
 
 fn qwen_command(cli: &Path, cache_dir: &Path) -> Command {
@@ -586,6 +774,8 @@ fn write_silent_wav(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn temp_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -623,5 +813,95 @@ mod tests {
             Some(EXPECTED_QWEN_1_7B_BYTES)
         );
         assert_eq!(expected_bytes_for_engine("unknown"), None);
+    }
+
+    #[test]
+    fn qwen_platform_accepts_apple_silicon_on_macos_14_or_newer() {
+        assert_eq!(
+            qwen_platform_unavailable_reason("aarch64", Some("14.0")),
+            None
+        );
+        assert_eq!(
+            qwen_platform_unavailable_reason("aarch64", Some("15.6.1")),
+            None
+        );
+    }
+
+    #[test]
+    fn qwen_platform_rejects_old_unknown_and_non_apple_silicon_systems() {
+        assert!(qwen_platform_unavailable_reason("aarch64", Some("13.7"))
+            .expect("old macOS reason")
+            .contains("macOS 14"));
+        assert!(qwen_platform_unavailable_reason("aarch64", None)
+            .expect("unknown macOS reason")
+            .contains("Не удалось определить"));
+        assert!(qwen_platform_unavailable_reason("x86_64", Some("15.0"))
+            .expect("Intel reason")
+            .contains("Apple Silicon"));
+    }
+
+    #[test]
+    fn macos_major_parser_is_conservative() {
+        assert_eq!(parse_macos_major("14.6.1"), Some(14));
+        assert_eq!(parse_macos_major("15"), Some(15));
+        assert_eq!(parse_macos_major(""), None);
+        assert_eq!(parse_macos_major("unknown"), None);
+    }
+
+    #[test]
+    fn cli_resolution_finds_application_support_venv() {
+        let dir = temp_dir("app-venv-cli");
+        let cli = dir.join("bin/mlx-qwen3-asr");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(cli.parent().expect("cli parent")).expect("create cli dir");
+        std::fs::write(&cli, b"#!/bin/sh\n").expect("write fake cli");
+
+        let resolved = resolve_cli_from_candidates(None, Some(cli.clone()), &[], None)
+            .expect("resolve app venv CLI");
+
+        assert_eq!(resolved, cli);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn qwen_install_keeps_other_shared_venv_runtimes() {
+        assert_eq!(
+            QWEN_RUNTIME_PACKAGES,
+            &["mlx==0.31.1", "mlx-qwen3-asr[serve]==0.3.5"]
+        );
+        assert!(!QWEN_RUNTIME_PACKAGES
+            .iter()
+            .any(|package| package.starts_with("mlx-lm")
+                || package.starts_with("mlx-vlm")
+                || package.starts_with("parakeet-mlx")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_readiness_handles_clean_and_already_prepared_venvs() {
+        let dir = temp_dir("runtime-ready");
+        let python = dir.join("bin/python");
+        let cli = dir.join("bin/mlx-qwen3-asr");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(python.parent().expect("runtime parent"))
+            .expect("create runtime dir");
+
+        assert!(!qwen_runtime_ready_at(&python, &cli));
+
+        std::fs::write(&python, b"#!/bin/sh\nexit 0\n").expect("write fake python");
+        std::fs::write(&cli, b"#!/bin/sh\nexit 0\n").expect("write fake cli");
+        let mut permissions = std::fs::metadata(&python)
+            .expect("python metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&python, permissions).expect("make python executable");
+        let mut cli_permissions = std::fs::metadata(&cli).expect("cli metadata").permissions();
+        cli_permissions.set_mode(0o755);
+        std::fs::set_permissions(&cli, cli_permissions).expect("make cli executable");
+
+        assert!(qwen_runtime_ready_at(&python, &cli));
+        assert!(qwen_runtime_ready_at(&python, &cli));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

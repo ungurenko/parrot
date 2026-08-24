@@ -22,8 +22,8 @@ paths: "src-tauri/src/{model,paths,transcriber*}.rs"
 ## Qwen3-ASR 0.6B / 1.7B MLX
 
 - **Модели:** `Qwen/Qwen3-ASR-1.7B` и `Qwen/Qwen3-ASR-0.6B` на HuggingFace (MLX-порт, нативно на Apple Silicon).
-- **CLI:** `.qwen-mlx/venv/bin/mlx-qwen3-asr`, ищется также через `PARROT_QWEN_BIN`, старый `AUDIO_TO_TEXT_QWEN_BIN` и `$PATH` (см. `transcriber_qwen::resolve_cli`).
-- **Установка:** `tools/setup_qwen_mlx.sh` создаёт venv и ставит `mlx-qwen3-asr`.
+- **CLI:** пользовательский `paths::qwen_env_dir()/bin/mlx-qwen3-asr`; для разработки также поддерживаются `PARROT_QWEN_BIN`, старый `AUDIO_TO_TEXT_QWEN_BIN`, repo-local venv и `$PATH`.
+- **Установка:** `download_model_for_engine` на macOS 14+ сам создаёт общий user-space venv через `mlx_env`, ставит pinned `mlx` + `mlx-qwen3-asr[serve]` и затем прогревает выбранную модель. `tools/setup_qwen_mlx.sh` остаётся dev-fallback.
 - **Cache:** `HF_HOME` принудительно указывает на `paths::qwen_cache_dir(app)` (`~/Library/Application Support/com.alexk.parrot/models/qwen-mlx/`).
 - **Флаги запуска:** `--stdout-only --no-progress --model <repo>`.
 - **Warmup:** `transcriber_qwen::warmup_model` прогоняет 1 сек тишины, чтобы HF скачал модель.
@@ -48,12 +48,12 @@ paths: "src-tauri/src/{model,paths,transcriber*}.rs"
 ## Логика выбора движка
 
 - `Settings.engine: "parakeet" | "whisper" | "qwen-0.6b" | "qwen-1.7b"`, дефолт `parakeet` (стабильный путь для обычного пользователя).
-- Qwen показывается как недоступный, если CLI `mlx-qwen3-asr` не найден.
+- Qwen доступен для установки на Apple Silicon с macOS 14+; отсутствие CLI означает «ещё не установлен», а не «недоступен». На старых macOS показывается честная причина несовместимости.
 - `is_model_ready(app)` проверяет файлы активного движка (для Qwen — существование HF cache и CLI).
 - `download_model(app)` скачивает активный движок (для Qwen — вызывает `warmup_model`, который триггерит HF-скачивание).
-- `preload_active_engine(handle)` в `setup()` прогревает Parakeet/Whisper в фоне. Для Qwen preload пропускается — CLI стартует per-job.
+- `preload_active_engine(handle)` прогревает готовый активный движок; для установленного Qwen запускается локальный warm server.
 
 ## Прогресс-модель
 
-- Событие `model:progress` с `u32` (0-100).
+- Событие `model:progress` с `u32` (0-100); `model:stage` включает `installing`, `downloading`, `warmup`, `ready`.
 - `download_with_progress(url, dest, percent_start, percent_end)` эмитит линейный прогресс в пределах весов.

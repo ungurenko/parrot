@@ -1567,7 +1567,11 @@ fn candidate_roots() -> Vec<PathBuf> {
 /// the venv, upgrade pip, install MLX runtimes. Idempotent — if everything is
 /// already present, returns quickly. Streams progress lines via `on_progress`.
 pub fn install_env<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: F) -> Result<()> {
-    let venv_python = mlx_env::ensure_user_python_venv(app, &on_progress)?;
+    mlx_env::with_install_lock(|| install_env_locked(app, &on_progress))
+}
+
+fn install_env_locked<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: &F) -> Result<()> {
+    let venv_python = mlx_env::ensure_user_python_venv(app, on_progress)?;
 
     // Step 2 — upgrade pip (best-effort; skip failure to keep going).
     on_progress("Обновляю pip…");

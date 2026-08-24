@@ -47,6 +47,12 @@ export function modelProgressMessage({
       detail: "Модель загружается в память. Обычно это 10-30 секунд.",
     };
   }
+  if (stage === "installing") {
+    return {
+      title: "Устанавливаю локальные компоненты",
+      detail: "Подготавливаю окружение для модели. Это нужно сделать только один раз.",
+    };
+  }
 
   const speed = speedBytesPerSec ?? detail?.speed_bytes_per_sec ?? 0;
   return {

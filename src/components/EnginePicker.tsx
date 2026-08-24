@@ -6,10 +6,9 @@ import {
   isSlowModelDownload,
   modelDownloadDetails,
 } from "@/lib/modelProgress";
-import { formatErrorDescription } from "@/lib/userErrors";
 import { ENGINE_MODES } from "@/lib/engineModes";
 import { modelProgressMessage } from "@/lib/progressEstimate";
-import { DownloadIcon, Trash2Icon } from "lucide-react";
+import { Trash2Icon } from "lucide-react";
 import {
   type Engine,
   type EngineStatuses,
@@ -21,6 +20,7 @@ interface Props {
   value: Engine;
   statuses?: EngineStatuses;
   busyEngine?: Engine | null;
+  failedEngine?: Engine | null;
   deletingEngine?: Engine | null;
   progress?: number;
   progressDetail?: ModelProgressDetail | null;
@@ -44,12 +44,13 @@ const progressText = (
 };
 
 const unavailableText = (reason?: string | null) =>
-  reason ? formatErrorDescription(reason) : null;
+  reason?.trim() || null;
 
 export function EnginePicker({
   value,
   statuses = {},
   busyEngine = null,
+  failedEngine = null,
   deletingEngine = null,
   progress = 0,
   progressDetail = null,
@@ -63,15 +64,16 @@ export function EnginePicker({
   const showModelStatus = Boolean(onPrepare || onDelete);
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-2 overflow-x-hidden">
+    <div className="engine-list flex w-full min-w-0 flex-col gap-2 overflow-x-hidden">
       {ENGINE_MODES.map((opt) => {
         const active = value === opt.engine;
         const status = statuses[opt.engine];
         const available = status?.available ?? true;
         const ready = Boolean(status?.modelReady);
+        const selected = active && (ready || !showModelStatus);
         const preparing = busyEngine === opt.engine;
         const deleting = deletingEngine === opt.engine;
-        const prepareLabel = `Подготовить режим «${opt.title}»`;
+        const failed = failedEngine === opt.engine;
         const unavailable = unavailableText(status?.unavailableReason);
         const detailText = preparing ? modelDownloadDetails(progressDetail) : null;
         const slowDownload = preparing && isSlowModelDownload(progressDetail);
@@ -80,52 +82,59 @@ export function EnginePicker({
           percent: progress,
           detail: progressDetail,
         });
+        let actionLabel = "Скачать и выбрать";
+        if (!available) {
+          actionLabel = "Недоступна";
+        } else if (preparing) {
+          actionLabel =
+            stage === "installing" ? "Устанавливаю…" : calmProgress.title;
+        } else if (selected) {
+          actionLabel = "Выбрана";
+        } else if (ready || !showModelStatus) {
+          actionLabel = "Выбрать";
+        } else if (failed) {
+          actionLabel = "Повторить";
+        }
+        const actionDisabled =
+          !available || selected || actionBusy || hasActiveJob;
+        const actionHint = hasActiveJob
+          ? ACTIVE_JOB_SWITCH_HINT
+          : `${actionLabel}: ${opt.title}`;
+        const runAction = () => {
+          if (ready || !showModelStatus) {
+            onChange(opt.engine);
+          } else {
+            onPrepare?.(opt.engine);
+          }
+        };
 
         return (
           <div
             key={opt.engine}
             className={cn(
               "engine-card flex min-w-0 flex-col gap-2",
-              active && "selected",
+              selected && "selected",
               !available && "unavailable",
             )}
           >
-            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start">
-              <button
-                type="button"
-                  onClick={() => onChange(opt.engine)}
-                  disabled={!available || (hasActiveJob && !active)}
-                  title={
-                    hasActiveJob && !active
-                      ? ACTIVE_JOB_SWITCH_HINT
-                      : active
-                        ? "Эта модель выбрана"
-                        : "Выбрать эту модель"
-                  }
-                  className="flex min-w-0 flex-1 items-start gap-3 rounded-md text-left outline-none disabled:cursor-not-allowed disabled:opacity-60 focus-visible:ring-3 focus-visible:ring-ring/50"
-                >
+            <div className="flex min-w-0 flex-col gap-2.5 sm:flex-row sm:items-start">
+              <div className="flex min-w-0 flex-1 items-start gap-3">
                 <span
                   className={cn(
                     "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border text-xs",
-                    active
+                    selected
                       ? "border-primary bg-primary text-primary-foreground"
                       : "border-hairline-strong bg-surface-2 text-muted-foreground",
                   )}
                   aria-hidden="true"
                 >
-                  {active ? "✓" : ""}
+                  {selected ? "✓" : ""}
                 </span>
                 <span className="min-w-0">
                   <span className="flex min-w-0 flex-wrap items-center gap-2">
                     <span className="font-medium leading-snug">{opt.title}</span>
                     <Badge variant="outline">{opt.size}</Badge>
                     {opt.badge && <Badge variant="secondary">{opt.badge}</Badge>}
-                    {active && (
-                      <Badge variant="default" title="Эта модель сейчас выбрана">
-                        Выбрана
-                      </Badge>
-                    )}
-                    {!available && <Badge variant="secondary">Недоступна</Badge>}
                   </span>
                   <span className="mt-1 block text-xs font-medium text-muted-foreground">
                     {opt.subtitle}
@@ -137,9 +146,9 @@ export function EnginePicker({
                     Модель: {opt.technicalName}
                   </span>
                 </span>
-              </button>
+              </div>
 
-              <div className="flex shrink-0 items-center gap-2 self-start sm:self-auto">
+              <div className="flex shrink-0 flex-wrap items-center gap-2 self-start sm:max-w-[210px] sm:justify-end">
                 {showModelStatus && (
                   <span
                     className={cn("status-chip", ready && "ready")}
@@ -154,23 +163,17 @@ export function EnginePicker({
                   </span>
                 )}
 
-                {!ready && onPrepare && available && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size={preparing ? "sm" : "icon-sm"}
-                    disabled={actionBusy}
-                    onClick={() => onPrepare(opt.engine)}
-                    title={prepareLabel}
-                    aria-label={prepareLabel}
-                  >
-                    {preparing ? (
-                      `${progress}%`
-                    ) : (
-                      <DownloadIcon data-icon="inline-start" />
-                    )}
-                  </Button>
-                )}
+                <Button
+                  type="button"
+                  variant={selected ? "default" : "outline"}
+                  size="sm"
+                  disabled={actionDisabled}
+                  onClick={runAction}
+                  title={actionHint}
+                  aria-label={`${actionLabel}: ${opt.title}`}
+                >
+                  {actionLabel}
+                </Button>
 
                 {ready && onDelete && (
                   <Button

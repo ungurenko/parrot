@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use flate2::read::GzDecoder;
+use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -19,6 +20,15 @@ const STANDALONE_PYTHON_SHA256: &str =
 const STANDALONE_PYTHON_BYTES: u64 = 17_836_558;
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+static INSTALL_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serialize all mutations of the shared MLX venv. Parakeet, Qwen ASR and
+/// summaries use the same Python environment, and parallel pip processes can
+/// otherwise leave its metadata or packages in a partially updated state.
+pub(crate) fn with_install_lock<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _guard = INSTALL_LOCK.lock();
+    operation()
+}
 
 /// Download the pinned standalone Python and create the shared user-space venv.
 /// Returns the existing venv immediately when it has already been prepared.
@@ -201,6 +211,8 @@ fn command_error(prefix: &str, stderr: &[u8], code: Option<i32>) -> anyhow::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     #[test]
     fn sha256_file_matches_known_digest() {
@@ -211,5 +223,32 @@ mod tests {
             "4488b8b86b1ac061dbe37242297e5827dad889823fd1a5acaed43dec0108d048"
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn install_lock_serializes_shared_venv_mutations() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+
+        for _ in 0..4 {
+            let active = active.clone();
+            let max_active = max_active.clone();
+            handles.push(std::thread::spawn(move || {
+                with_install_lock(|| {
+                    let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_active.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(10));
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                })
+                .expect("install lock")
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("join install worker");
+        }
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
     }
 }

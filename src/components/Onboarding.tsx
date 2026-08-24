@@ -46,6 +46,8 @@ export function Onboarding({ onDone }: Props) {
   const [progressDetail, setProgressDetail] =
     useState<ModelProgressDetail | null>(null);
   const [modelStage, setModelStage] = useState<ModelStage>("downloading");
+  const [busyEngine, setBusyEngine] = useState<Engine | null>(null);
+  const [failedEngine, setFailedEngine] = useState<Engine | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showEngineChoice, setShowEngineChoice] = useState(false);
   const selectedEngineStatus = settings ? engineStatuses[settings.engine] : undefined;
@@ -101,11 +103,6 @@ export function Onboarding({ onDone }: Props) {
     }
   };
 
-  const chooseFastMode = async () => {
-    await changeEngine("parakeet");
-    setShowEngineChoice(false);
-  };
-
   const prepareOrFinish = async () => {
     if (selectedEngineStatus?.modelReady) {
       await finish();
@@ -114,20 +111,44 @@ export function Onboarding({ onDone }: Props) {
     await downloadModel();
   };
 
-  const downloadModel = async () => {
+  const downloadModel = async (engine: Engine = settings?.engine ?? "parakeet") => {
+    if (!settings) return;
     setStep("downloading");
+    setBusyEngine(engine);
+    setFailedEngine(null);
     setModelStage("downloading");
     setProgress(0);
     setProgressDetail(null);
     setError(null);
     try {
-      await invoke("download_model");
-      invoke<EngineStatuses>("get_engine_statuses").then(setEngineStatuses);
+      await invoke("download_model_for_engine", { engine });
+      const statuses = await invoke<EngineStatuses>("get_engine_statuses");
+      setEngineStatuses(statuses);
+      if (!statuses[engine]?.modelReady) {
+        throw new Error("Модель не прошла итоговую проверку. Попробуйте ещё раз.");
+      }
+      if (engine !== settings.engine) {
+        const next = { ...settings, engine };
+        await invoke("set_settings", { new: next });
+        setSettings(next);
+      }
       setStep("ready");
     } catch (e: unknown) {
       const friendly = userErrorFrom(e);
       setError(`${friendly.message}\n${friendly.action}`);
+      setFailedEngine(engine);
       setStep("setup");
+    } finally {
+      setBusyEngine(null);
+    }
+  };
+
+  const chooseFastMode = async () => {
+    setShowEngineChoice(false);
+    if (engineStatuses.parakeet?.modelReady) {
+      await changeEngine("parakeet");
+    } else {
+      await downloadModel("parakeet");
     }
   };
 
@@ -227,7 +248,10 @@ export function Onboarding({ onDone }: Props) {
                   <EnginePicker
                     value={settings.engine}
                     statuses={engineStatuses}
+                    busyEngine={busyEngine}
+                    failedEngine={failedEngine}
                     onChange={changeEngine}
+                    onPrepare={downloadModel}
                   />
                 </Field>
               )}

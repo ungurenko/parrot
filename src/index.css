@@ -94,6 +94,10 @@ body {
   --hairline:            rgba(23, 27, 34, 0.08);
   --hairline-strong:     rgba(23, 27, 34, 0.1);
   --hairline-dashed:     rgba(42, 48, 58, 0.18);
+  --status-ready:        #247a2a;
+  --status-ready-line:   rgba(36, 122, 42, 0.3);
+  --status-ready-bg:     rgba(56, 198, 58, 0.08);
+  --scroll-thumb:        rgba(74, 69, 66, 0.28);
   --shadow-panel:        0 12px 32px rgba(21, 28, 38, 0.07);
   --shadow-panel-sm:     0 8px 20px rgba(18, 22, 30, 0.04);
   --shadow-elev:         0 3px 12px rgba(18, 22, 30, 0.04);
@@ -230,6 +234,10 @@ body {
   --hairline:            rgba(255, 255, 255, 0.1);
   --hairline-strong:     rgba(255, 255, 255, 0.14);
   --hairline-dashed:     rgba(255, 255, 255, 0.18);
+  --status-ready:        #72db78;
+  --status-ready-line:   rgba(114, 219, 120, 0.34);
+  --status-ready-bg:     rgba(56, 198, 58, 0.14);
+  --scroll-thumb:        rgba(201, 191, 181, 0.36);
   --shadow-panel:        0 12px 32px rgba(0, 0, 0, 0.4);
   --shadow-panel-sm:     0 8px 20px rgba(0, 0, 0, 0.3);
   --shadow-elev:         0 3px 12px rgba(0, 0, 0, 0.25);
@@ -812,9 +820,9 @@ body {
     position: relative;
     padding: 14px 16px;
     border-radius: 12px;
-    background: rgba(255,255,255,0.72);
-    border: 1px solid rgba(23, 27, 34, 0.08);
-    box-shadow: 0 3px 12px rgba(18, 22, 30, 0.04);
+    background: var(--surface-translucent);
+    border: 1px solid var(--hairline);
+    box-shadow: var(--shadow-elev);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     transition: background 0.16s, border-color 0.16s, box-shadow 0.16s;
@@ -829,13 +837,13 @@ body {
     transition: background 0.16s;
   }
   .engine-card:hover {
-    background: rgba(255,255,255,0.9);
-    border-color: rgba(23, 27, 34, 0.1);
+    background: var(--surface-glass-hover);
+    border-color: var(--hairline-strong);
   }
   .engine-card.selected {
-    background: rgba(255,255,255,0.96);
-    border-color: rgba(255, 122, 89, 0.24);
-    box-shadow: 0 5px 18px rgba(18, 22, 30, 0.07);
+    background: var(--surface);
+    border-color: color-mix(in srgb, var(--parrot-accent) 30%, transparent);
+    box-shadow: var(--shadow-elev);
   }
   .engine-card.selected::before {
     background: #ff7a59;
@@ -849,21 +857,21 @@ body {
     display: inline-flex; align-items: center; gap: var(--s-2);
     height: 22px; padding: 0 var(--s-3);
     border-radius: var(--r-pill);
-    background: transparent;
-    border: 0.5px solid rgba(0,0,0,0.08);
+    background: var(--surface-2);
+    border: 0.5px solid var(--hairline-strong);
     font: 500 var(--fs-xs) var(--font-sans);
     color: var(--ink-3);
     white-space: nowrap;
   }
   .status-chip .dot {
     width: 6px; height: 6px; border-radius: 50%;
-    background: #c9bfb5;
+    background: var(--ink-4);
     flex-shrink: 0;
   }
   .status-chip.ready {
-    color: #2e8a32;
-    border-color: rgba(56, 198, 58, 0.28);
-    background: rgba(56, 198, 58, 0.08);
+    color: var(--status-ready);
+    border-color: var(--status-ready-line);
+    background: var(--status-ready-bg);
   }
   .status-chip.ready .dot {
     background: radial-gradient(circle at 30% 30%, #8bf06a, #38c63a 70%);
@@ -1987,6 +1995,23 @@ body {
   .settings-content {
     padding: 22px;
     background: var(--surface-content);
+    scrollbar-color: var(--scroll-thumb) transparent;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
+  }
+  .settings-content::-webkit-scrollbar {
+    width: 10px;
+  }
+  .settings-content::-webkit-scrollbar-thumb {
+    min-height: 42px;
+    border: 3px solid transparent;
+    border-radius: var(--r-pill);
+    background: var(--scroll-thumb);
+    background-clip: padding-box;
+  }
+  .engine-list .engine-card {
+    padding: 11px 12px;
   }
   .settings-content [data-slot="field-label"] {
     color: var(--ink);
