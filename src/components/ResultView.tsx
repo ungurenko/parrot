@@ -290,10 +290,16 @@ export function ResultView({
             if (!summarizerEnabled) {
               void enableSummarizerAndDownload();
             } else {
-              document.querySelector(".summary-card")?.scrollIntoView({
+              const card = document.querySelector(".summary-card");
+              card?.scrollIntoView({
                 behavior: "smooth",
                 block: "nearest",
               });
+              card?.classList.add("summary-flash");
+              window.setTimeout(
+                () => card?.classList.remove("summary-flash"),
+                1200,
+              );
             }
           }}
           disabled={promoBusy}

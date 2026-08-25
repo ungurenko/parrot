@@ -277,3 +277,10 @@ export function formatErrorDescription(error: unknown): string {
   const userError = userErrorFrom(error);
   return `${userError.message}\n${userError.action}`;
 }
+
+// Backend commands reject user-initiated cancellations with the exact
+// string "cancelled" (see ensure_not_cancelled in src-tauri). Surface
+// them through one predicate so call sites never sniff raw strings.
+export function isCancelledError(e: unknown): boolean {
+  return String(e).includes("cancelled");
+}

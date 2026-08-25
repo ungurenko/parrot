@@ -555,9 +555,23 @@ body {
     100% { transform: translateX(250%); }
   }
 
+  /* Появление панели при смене экрана и вспышка карточки конспекта */
+  @keyframes view-enter {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+  .view-enter { animation: view-enter 0.18s ease-out; }
+  @keyframes summary-flash {
+    0% { box-shadow: 0 0 0 3px rgba(255,122,89,.55); }
+    100% { box-shadow: 0 0 0 3px rgba(255,122,89,0); }
+  }
+  .summary-flash { animation: summary-flash 1.2s ease-out; }
+
   @media (prefers-reduced-motion: reduce) {
     .parrot-pulse::before, .parrot-pulse::after { animation: none; }
     .progress-fill.indeterminate { animation: none; }
+    .view-enter { animation: none; }
+    .summary-flash { animation: none; }
   }
 
   /* Processing: stages timeline */
@@ -1458,6 +1472,7 @@ body {
     align-items: center;
     gap: var(--s-2);
     height: 34px;
+    cursor: pointer;
     padding: 0 13px;
     border-radius: 10px;
     background: var(--surface);

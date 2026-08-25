@@ -22,7 +22,7 @@ import { modelDownloadDetails } from "@/lib/modelProgress";
 import { cleanupTauriListeners, listenInTauri } from "@/lib/runtime";
 import { modeOptionForEngine } from "@/lib/engineModes";
 import { modelProgressMessage } from "@/lib/progressEstimate";
-import { formatErrorDescription, userErrorFrom } from "@/lib/userErrors";
+import { formatErrorDescription, isCancelledError, userErrorFrom } from "@/lib/userErrors";
 import {
   type Engine,
   type EngineStatuses,
@@ -134,6 +134,12 @@ export function Onboarding({ onDone }: Props) {
       }
       setStep("ready");
     } catch (e: unknown) {
+      if (isCancelledError(e)) {
+        setStep("setup");
+        setError(null);
+        setFailedEngine(null);
+        return;
+      }
       const friendly = userErrorFrom(e);
       setError(`${friendly.message}\n${friendly.action}`);
       setFailedEngine(engine);
@@ -299,6 +305,18 @@ export function Onboarding({ onDone }: Props) {
               {selectedEngineStatus?.modelReady
                 ? "Начать работу"
                 : "Подготовить Parrot и начать"}
+            </Button>
+          )}
+          {step === "downloading" && settings && (
+            <Button
+              variant="outline"
+              onClick={() =>
+                void invoke("cancel_model_prepare", {
+                  engine: settings.engine,
+                }).catch(() => {})
+              }
+            >
+              Отменить загрузку
             </Button>
           )}
           {step === "ready" && (

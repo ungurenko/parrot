@@ -53,7 +53,7 @@ import {
   isTauriRuntime,
   listenInTauri,
 } from "@/lib/runtime";
-import { formatErrorDescription } from "@/lib/userErrors";
+import { formatErrorDescription, isCancelledError } from "@/lib/userErrors";
 import {
   DatabaseIcon,
   DownloadIcon,
@@ -74,6 +74,7 @@ interface Props {
   onClose: () => void;
   updater: AutoUpdate;
   hasActiveJob: boolean;
+  initialTab?: SettingsTab;
 }
 
 const ACTIVE_JOB_HINT =
@@ -93,7 +94,7 @@ type ShortcutKeyboardEvent = {
 };
 
 type AccessibilityPermissionState = "checking" | "request" | "verify" | "granted";
-type SettingsTab = "basic" | "models" | "dictation" | "summary" | "updates";
+export type SettingsTab = "basic" | "models" | "dictation" | "summary" | "updates";
 
 const ACCESSIBILITY_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
@@ -766,10 +767,15 @@ function displayShortcutParts(shortcut: string): string[] {
     .filter(Boolean);
 }
 
-export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
+export function SettingsModal({
+  onClose,
+  updater,
+  hasActiveJob,
+  initialTab,
+}: Props) {
   const previewMode = !isTauriRuntime();
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [activeTab, setActiveTab] = useState<SettingsTab>("basic");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? "basic");
   const [appVersion, setAppVersion] = useState("");
   const [modelStatuses, setModelStatuses] = useState<EngineStatuses>({});
   const [busyEngine, setBusyEngine] = useState<Engine | null>(null);
@@ -958,8 +964,10 @@ export function SettingsModal({ onClose, updater, hasActiveJob }: Props) {
         toast.success("Модель скачана и выбрана");
       }
     } catch (e: unknown) {
-      setFailedEngine(engine);
-      setSettingsError(formatErrorDescription(e));
+      if (!isCancelledError(e)) {
+        setFailedEngine(engine);
+        setSettingsError(formatErrorDescription(e));
+      }
     } finally {
       setBusyEngine(null);
     }

@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -205,6 +206,18 @@ export function EnginePicker({
                   value={Math.max(progress, 2)}
                   className={stage === "warmup" ? "animate-pulse" : ""}
                 />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="self-start px-2 text-xs"
+                  onClick={() =>
+                    void invoke("cancel_model_prepare", { engine: opt.engine }).catch(
+                      () => {},
+                    )
+                  }
+                >
+                  Отменить
+                </Button>
                 <div className="break-words text-xs leading-relaxed text-muted-foreground">
                   {progressText(progress, stage)}
                 </div>

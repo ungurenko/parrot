@@ -9,7 +9,7 @@ import {
   isTauriRuntime,
   listenInTauri,
 } from "@/lib/runtime";
-import { formatErrorDescription, userErrorFrom } from "@/lib/userErrors";
+import { formatErrorDescription, isCancelledError, userErrorFrom } from "@/lib/userErrors";
 import {
   DEFAULT_SUMMARY_MODEL,
   SUMMARY_MODEL_SIZE,
@@ -212,7 +212,12 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       setModelProgress(100);
       await refreshSummarizerStatus();
     } catch (e: unknown) {
-      setModelError(formatErrorDescription(e));
+      if (isCancelledError(e)) {
+        setModelProgress(0);
+        setModelStage("downloading");
+      } else {
+        setModelError(formatErrorDescription(e));
+      }
     } finally {
       setModelInstalling(false);
     }
@@ -314,6 +319,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
                 size="sm"
                 onClick={startSummary}
                 title="Перегенерировать"
+                aria-label="Перегенерировать конспект"
               >
                 ↻
               </Button>
@@ -371,6 +377,18 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
               ? `Прогреваю модель… ${modelProgress}%`
               : `Скачиваю модель ${summaryModelSize}… ${modelProgress}%`}
           </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              void invoke("cancel_model_prepare", { engine: "summary" }).catch(
+                () => {},
+              )
+            }
+          >
+            Отменить
+          </Button>
         </div>
       )}
 

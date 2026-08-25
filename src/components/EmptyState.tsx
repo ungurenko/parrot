@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   onFiles: (paths: string[]) => void;
-  onYouTube: (url: string) => void;
+  onYouTube: (url: string) => Promise<boolean>;
   historyEntries?: HistoryEntry[];
   onOpenHistory?: (id: string) => void;
   onDeleteHistory?: (id: string) => void;

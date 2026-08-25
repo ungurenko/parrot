@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { toast } from "sonner";
@@ -8,7 +8,7 @@ import { EmptyState } from "./components/EmptyState";
 import { ProcessingView } from "./components/ProcessingView";
 import { ResultView } from "./components/ResultView";
 import { JobList } from "./components/JobList";
-import { SettingsModal } from "./components/SettingsModal";
+import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { Onboarding } from "./components/Onboarding";
 import { Toaster } from "@/components/ui/sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -138,7 +138,13 @@ function pluralFiles(n: number): string {
 function App() {
   const [jobs, dispatchJobs] = useReducer(jobsReducer, []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [historyJob, setHistoryJob] = useState<Job | null>(null);
+  const selectedIdRef = useRef<string | null>(selectedId);
+  selectedIdRef.current = selectedId;
+  const jobsRef = useRef(jobs);
+  jobsRef.current = jobs;
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("basic");
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [dictationPhase, setDictationPhase] = useState<DictationPhase | "done">(
@@ -222,13 +228,32 @@ function App() {
 
   useJobEvents(
     dispatchJobs,
-    useCallback((id: string) => setSelectedId(id), []),
+    useCallback((id: string) => {
+      const selected = selectedIdRef.current
+        ? jobsRef.current.find((j) => j.id === selectedIdRef.current)
+        : null;
+      if (!selected || selected.status !== "done") {
+        setSelectedId(id);
+        return;
+      }
+      const finished = jobsRef.current.find((j) => j.id === id);
+      toast.success("Расшифровка готова", {
+        description: finished?.sourceName,
+      });
+    }, []),
+    useCallback((id: string, message: string) => {
+      if (selectedIdRef.current === id) return;
+      const friendly = userErrorFrom(message);
+      toast.error(friendly.title, {
+        description: formatErrorDescription(message),
+      });
+    }, []),
   );
 
   const cancelJob = useCallback(async (id: string) => {
-    dispatchJobs({ type: "jobCanceling", id });
     try {
       await invoke("cancel_job", { id });
+      dispatchJobs({ type: "jobCanceling", id });
     } catch (error) {
       console.error("cancel_job failed:", error);
       const friendly = userErrorFrom(error);
@@ -258,13 +283,16 @@ function App() {
     }
   }, []);
 
-  const handleYouTube = useCallback(async (url: string) => {
-    if (!isTauriRuntime()) return;
+  const handleYouTube = useCallback(async (url: string): Promise<boolean> => {
+    if (!isTauriRuntime()) return false;
     try {
       await invoke("enqueue_youtube", { url });
+      toast.success("Добавил ссылку, начинаю…");
+      return true;
     } catch (e) {
       const friendly = userErrorFrom(e);
       toast.error(friendly.title, { description: formatErrorDescription(e) });
+      return false;
     }
   }, []);
 
@@ -272,7 +300,10 @@ function App() {
     async (id: string) => {
       try {
         const loaded = await loadEntry(id);
-        if (!loaded) return;
+        if (!loaded) {
+          toast.info("Запись недоступна");
+          return;
+        }
         const rehydrated: Job = {
           id: loaded.entry.id,
           sourceName: loaded.entry.sourceName,
@@ -290,7 +321,7 @@ function App() {
           summaryStatus: loaded.summary ? "done" : undefined,
           summaryPercent: loaded.summary ? 100 : undefined,
         };
-        dispatchJobs({ type: "historyLoaded", job: rehydrated });
+        setHistoryJob(rehydrated);
         setSelectedId(rehydrated.id);
       } catch (e) {
         const friendly = userErrorFrom(e);
@@ -331,7 +362,19 @@ function App() {
     }
   }, []);
 
-  const view = useMemo(() => pickView(jobs, selectedId), [jobs, selectedId]);
+  const handleDeleteHistory = useCallback(
+    async (id: string) => {
+      try {
+        await deleteEntry(id);
+      } catch (e) {
+        const friendly = userErrorFrom(e);
+        toast.error(friendly.title, { description: formatErrorDescription(e) });
+      }
+    },
+    [deleteEntry],
+  );
+
+  const view = useMemo(() => pickView(historyJob ? [historyJob, ...jobs] : jobs, selectedId), [historyJob, jobs, selectedId]);
 
   const hasActiveJob = useMemo(
     () =>
@@ -344,9 +387,19 @@ function App() {
     [jobs],
   );
 
+  const queueJobs = useMemo(
+    () => (historyJob ? jobs.filter((j) => j.id !== historyJob.id) : jobs),
+    [jobs, historyJob],
+  );
+
+  const openSettings = useCallback((tab: SettingsTab = "basic") => {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+  }, []);
+
   const resetToEmpty = useCallback(() => setSelectedId(null), []);
 
-  if (needsOnboarding === null) return null;
+  if (needsOnboarding === null) return <main className="app-shell h-full" />;
   if (needsOnboarding) {
     return (
       <>
@@ -357,7 +410,6 @@ function App() {
   }
 
   const engineLabel = settings ? modeOptionForEngine(settings.engine).title : undefined;
-  const showQueue = jobs.length > 1;
   const dictationStatus =
     dictationPhase === "recording"
       ? "Запись"
@@ -368,6 +420,7 @@ function App() {
           : dictationPhase === "error"
             ? "Ошибка диктовки"
             : "Готово к диктовке";
+  const showQueue = queueJobs.length > 1;
   const dictationIdle =
     dictationPhase === "idle" ||
     dictationPhase === "done" ||
@@ -401,10 +454,12 @@ function App() {
         </div>
         <div className="toolbar-actions flex min-w-0 items-center gap-2">
           {settings?.dictation_enabled && (
-            <span
+            <button
+              type="button"
               className={`pill dictation-pill${dictationIdle ? " idle" : ""}`}
               aria-label={dictationTitle}
               title={dictationTitle}
+              onClick={() => openSettings("dictation")}
             >
               <MicIcon
                 size={14}
@@ -424,13 +479,13 @@ function App() {
                 {dictationStatus}
               </span>
               <span className={`led ${dictationLed}`} />
-            </span>
+            </button>
           )}
           {settings && (
             <button
               type="button"
               className="pill engine-pill"
-              onClick={() => setSettingsOpen(true)}
+              onClick={() => openSettings("basic")}
               title="Открыть настройки распознавания"
             >
               <span className="truncate">{engineLabel}</span>
@@ -448,7 +503,7 @@ function App() {
         <UpdateBanner
           updater={bannerUpdater}
           onDismiss={() => setUpdateDismissed(true)}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => openSettings("updates")}
         />
       )}
 
@@ -456,13 +511,14 @@ function App() {
         className={`grid min-h-0 flex-1 gap-4 p-4 ${showQueue ? "queue-grid" : ""}`}
       >
         <section className="flex min-h-0 min-w-0 flex-col">
+          <div key={view.kind} className="view-enter flex min-h-0 flex-1 flex-col">
           {view.kind === "empty" && (
             <EmptyState
               onFiles={handleFiles}
               onYouTube={handleYouTube}
               historyEntries={history}
               onOpenHistory={handleOpenHistory}
-              onDeleteHistory={deleteEntry}
+              onDeleteHistory={handleDeleteHistory}
               onClearHistory={() => {
                 clearAll();
                 toast.success("История очищена");
@@ -480,9 +536,10 @@ function App() {
               engineLabel={engineLabel}
               settings={settings}
               onSettingsChange={setSettings}
-              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenSettings={() => openSettings("models")}
             />
           )}
+          </div>
         </section>
 
         {showQueue && (
@@ -490,7 +547,7 @@ function App() {
             <div className="glass-label px-1">Очередь</div>
             <ScrollArea className="-mr-2 min-h-0 flex-1 pr-2">
               <JobList
-                jobs={jobs}
+                jobs={queueJobs}
                 onSelect={(j) => setSelectedId(j.id)}
                 onCancel={cancelJob}
                 selectedId={selectedId}
@@ -504,6 +561,7 @@ function App() {
         <SettingsModal
           updater={updater}
           hasActiveJob={hasActiveJob}
+          initialTab={settingsTab}
           onClose={() => {
             setSettingsOpen(false);
             if (isTauriRuntime()) {

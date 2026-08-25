@@ -38,6 +38,7 @@ export function useHistory() {
         setHistory((prev) => prev.filter((e) => e.id !== id));
       } catch (e) {
         console.error("delete_history_entry failed:", e);
+        throw e;
       }
     },
     [],

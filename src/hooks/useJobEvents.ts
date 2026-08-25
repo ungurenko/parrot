@@ -32,8 +32,7 @@ export type JobAction =
   | { type: "summaryProgress"; payload: SummaryProgress }
   | { type: "summaryDone"; payload: SummaryDone }
   | { type: "summaryError"; payload: SummaryError }
-  | { type: "summaryCanceled"; payload: SummaryCanceled }
-  | { type: "historyLoaded"; job: Job };
+  | { type: "summaryCanceled"; payload: SummaryCanceled };
 
 export function jobsReducer(jobs: Job[], action: JobAction): Job[] {
   switch (action.type) {
@@ -133,10 +132,6 @@ export function jobsReducer(jobs: Job[], action: JobAction): Job[] {
         summaryPercent: 0,
         summaryError: undefined,
       }));
-    case "historyLoaded": {
-      const without = jobs.filter((j) => j.id !== action.job.id);
-      return [action.job, ...without];
-    }
   }
 }
 
@@ -154,6 +149,7 @@ function updateJob(jobs: Job[], id: string, update: (job: Job) => Job): Job[] {
 export function useJobEvents(
   dispatch: React.Dispatch<JobAction>,
   onDone?: (id: string) => void,
+  onError?: (id: string, message: string) => void,
 ) {
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -170,6 +166,7 @@ export function useJobEvents(
       }),
       listenInTauri<JobError>("job:error", (e) => {
         dispatch({ type: "jobError", payload: e.payload });
+        onError?.(e.payload.id, e.payload.message);
       }),
       listenInTauri<JobTitle>("job:title", (e) => {
         dispatch({ type: "jobTitle", payload: e.payload });
@@ -185,6 +182,7 @@ export function useJobEvents(
       }),
       listenInTauri<SummaryError>("summary:error", (e) => {
         dispatch({ type: "summaryError", payload: e.payload });
+        onError?.(e.payload.id, e.payload.message);
       }),
       listenInTauri<SummaryCanceled>("summary:canceled", (e) => {
         dispatch({ type: "summaryCanceled", payload: e.payload });
@@ -194,5 +192,5 @@ export function useJobEvents(
     return () => {
       cleanupTauriListeners(listeners);
     };
-  }, [dispatch, onDone]);
+  }, [dispatch, onDone, onError]);
 }

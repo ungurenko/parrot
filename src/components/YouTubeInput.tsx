@@ -3,19 +3,25 @@ import { PlayIcon } from "lucide-react";
 import { youtubeValidation } from "@/lib/youtube";
 
 interface Props {
-  onSubmit: (url: string) => void;
+  onSubmit: (url: string) => Promise<boolean>;
 }
 
 export function YouTubeInput({ onSubmit }: Props) {
   const [url, setUrl] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const validation = youtubeValidation(url);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = url.trim();
-    if (!validation.ok) return;
-    onSubmit(trimmed);
-    setUrl("");
+    if (!validation.ok || submitting) return;
+    setSubmitting(true);
+    try {
+      const ok = await onSubmit(trimmed);
+      if (ok) setUrl("");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -41,7 +47,11 @@ export function YouTubeInput({ onSubmit }: Props) {
           aria-label="Ссылка на YouTube"
           aria-describedby="youtube-validation"
         />
-        <button type="submit" className="btn-primary" disabled={!validation.ok}>
+        <button
+          type="submit"
+          className="btn-primary"
+          disabled={!validation.ok || submitting}
+        >
           <PlayIcon size={16} aria-hidden="true" />
           Расшифровать
         </button>

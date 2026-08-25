@@ -66,6 +66,22 @@ export function DropZone({ onFiles }: Props) {
     const paths = Array.isArray(result) ? result : [result];
     onFiles(paths as string[]);
   }, [onFiles]);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.code === "KeyO"
+      ) {
+        e.preventDefault();
+        void pickFiles();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pickFiles]);
+
 
   return (
     <div className={cn("hero-drop", hovering && "drag")}>

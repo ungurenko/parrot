@@ -91,8 +91,14 @@ export function HistoryList({
   onClear,
   onRepeat,
 }: Props) {
-  const [query, setQuery] = useState("");
+  const deleteWithConfirm = (id: string) => {
+    const ok = window.confirm(
+      "Убрать запись из истории Parrot?\n\nТекст на диске останется.",
+    );
+    if (ok) onDelete(id);
+  };
   const [filter, setFilter] = useState<HistoryFilter>("all");
+  const [query, setQuery] = useState("");
   const showSearch = entries.length >= 8;
   const showFilters = entries.length >= 6;
 
@@ -223,7 +229,7 @@ export function HistoryList({
                 <button
                   type="button"
                   className="history-delete"
-                  onClick={() => onDelete(entry.id)}
+                  onClick={() => deleteWithConfirm(entry.id)}
                   title="Убрать из истории"
                   aria-label="Убрать из истории"
                 >

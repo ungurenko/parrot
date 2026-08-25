@@ -82,6 +82,18 @@ pub(crate) async fn download_model_for_engine(
     download_model_inner(app, &engine, token).await
 }
 
+// ponytail: отмена во время install_runtime срабатывает только на следующем
+// чекпоинте токена — задержка соответствует существующему паттерну загрузки.
+#[tauri::command]
+pub(crate) fn cancel_model_prepare(engine: String, state: State<'_, AppState>) -> bool {
+    let task_id = if engine == "summary" {
+        "model:summary".to_string()
+    } else {
+        format!("model:{engine}")
+    };
+    state.model_cancel.cancel(&task_id)
+}
+
 async fn download_model_inner(
     app: AppHandle,
     engine: &str,

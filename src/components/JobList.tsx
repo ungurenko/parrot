@@ -108,7 +108,8 @@ export function JobList({ jobs, onSelect, onCancel, selectedId }: Props) {
                     e.stopPropagation();
                     onCancel(job.id);
                   }}
-                  title="Отменить"
+                  title="Отменить задачу"
+                  aria-label="Отменить задачу"
                 >
                   <svg
                     width="12"
@@ -131,6 +132,7 @@ export function JobList({ jobs, onSelect, onCancel, selectedId }: Props) {
                     invoke("open_in_finder", { path: job.outputPath });
                   }}
                   title="Показать в Finder"
+                  aria-label="Показать в Finder"
                 >
                   <svg
                     width="12"
