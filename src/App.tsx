@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import type { Update } from "@tauri-apps/plugin-updater";
 import { toast } from "sonner";
 import { ChevronDownIcon, MicIcon } from "lucide-react";
 import parrotImg from "/parrot.png";
@@ -13,7 +14,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { jobsReducer, useJobEvents } from "./hooks/useJobEvents";
 import { useHistory } from "./hooks/useHistory";
-import { useAutoUpdate } from "./hooks/useAutoUpdate";
+import { useAutoUpdate, type AutoUpdate } from "./hooks/useAutoUpdate";
 import { useTheme } from "./hooks/useTheme";
 import { UpdateBanner } from "./components/UpdateBanner";
 import {
@@ -48,6 +49,31 @@ const BROWSER_PREVIEW_SETTINGS: Settings = {
   dictation_enabled: true,
   dictation_hold_key: "Alt+Space",
   theme: "system",
+};
+
+const PREVIEW_NOTES = [
+  "## 🎯 Что нового",
+  "",
+  "Транскрибация стала заметно быстрее: модель теперь постоянно живёт в памяти, поэтому файлы и голосовые начинаются сразу, без паузы на загрузку.",
+  "",
+  "Parrot сам подстраивается под конкретный Mac — на машинах с 16 ГБ памяти работает быстрый режим на видеокарте.",
+  "",
+  "Прогресс на длинных записях теперь двигается по ходу обработки.",
+  "",
+  "## 📦 Как получить обновление",
+  "",
+  "Откройте Parrot и установите обновление из появившегося уведомления.",
+].join("\n");
+
+// Browser preview only: lets the update banner render outside Tauri.
+const PREVIEW_UPDATER: AutoUpdate = {
+  available: { version: "0.4.27", body: PREVIEW_NOTES } as unknown as Update,
+  status: "idle",
+  progress: 0,
+  errorDetails: null,
+  errorScope: null,
+  runCheck: async () => {},
+  install: async () => {},
 };
 
 function pickView(jobs: Job[], selectedId: string | null): ViewState {
@@ -357,6 +383,8 @@ function App() {
         ? "idle"
         : "";
 
+  const bannerUpdater = isTauriRuntime() ? updater : PREVIEW_UPDATER;
+
   return (
     <main className="app-shell flex h-full flex-col">
       <header
@@ -416,9 +444,9 @@ function App() {
         </div>
       </header>
 
-      {updater.available && !updateDismissed && (
+      {bannerUpdater.available && !updateDismissed && (
         <UpdateBanner
-          updater={updater}
+          updater={bannerUpdater}
           onDismiss={() => setUpdateDismissed(true)}
           onOpenSettings={() => setSettingsOpen(true)}
         />

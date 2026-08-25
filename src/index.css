@@ -1056,12 +1056,18 @@ body {
   }
   .update-banner-icon {
     flex: 0 0 auto;
-    font-size: 18px;
-    line-height: 1;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--parrot-accent-2) 18%, transparent);
+    color: var(--parrot-accent);
   }
   .update-banner-body {
     flex: 1 1 auto; min-width: 0;
     display: flex; flex-direction: column; gap: 2px;
+  }
+  .update-banner-title-row {
+    display: flex; align-items: center; gap: var(--s-2);
   }
   .update-banner-title {
     font: 600 var(--fs-sm)/var(--lh-sm) var(--font-sans);
@@ -1080,6 +1086,31 @@ body {
   }
   .update-banner-subtitle:hover { color: var(--ink-2); }
   .update-banner-progress { margin-top: 2px; }
+  .update-banner-summary {
+    font-size: var(--fs-xs);
+    line-height: var(--lh-sm);
+    color: var(--ink-2);
+  }
+  .update-banner-meta {
+    display: flex; align-items: center; gap: var(--s-2);
+    font-size: var(--fs-xs);
+    color: var(--ink-3);
+  }
+  .update-banner-notes-toggle {
+    background: transparent; border: 0; padding: 0;
+    font-size: var(--fs-xs);
+    color: var(--ink-3);
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 2px;
+  }
+  .update-banner-notes-toggle:hover { color: var(--ink-2); }
+  .update-banner-notes {
+    max-height: 180px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: var(--s-2);
+    margin-top: var(--s-2); padding-right: var(--s-2);
+    font-size: var(--fs-xs);
+    color: var(--ink-2);
+  }
   .update-banner-actions {
     flex: 0 0 auto;
     display: flex; align-items: center; gap: var(--s-2);
