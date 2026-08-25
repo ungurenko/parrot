@@ -94,7 +94,7 @@ fn current_mlx_python() -> Option<PathBuf> {
     guard.clone().flatten()
 }
 
-pub fn is_mlx_ready() -> bool {
+fn is_mlx_ready() -> bool {
     current_mlx_python().is_some()
 }
 
@@ -164,7 +164,7 @@ fn detect_mlx_python() -> Option<PathBuf> {
         std::env::var_os("PARROT_PARAKEET_MLX_PYTHON").map(PathBuf::from),
         &mlx_candidate_roots(),
     )
-    .filter(|python| mlx_python_has_package(python))
+    .filter(|python| crate::mlx_env::python_import_ok(python, "import parakeet_mlx"))
 }
 
 fn resolve_mlx_python(explicit: Option<PathBuf>, roots: &[PathBuf]) -> Option<PathBuf> {
@@ -198,16 +198,6 @@ fn mlx_candidate_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn mlx_python_has_package(python: &Path) -> bool {
-    Command::new(python)
-        .args(["-c", "import parakeet_mlx"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
 fn mlx_hf_home() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("HF_HOME") {
         return Some(PathBuf::from(path));
@@ -238,7 +228,7 @@ fn install_mlx_runtime_locked(
     on_progress: &(impl Fn(&str) + Send + Sync),
 ) -> Result<()> {
     let venv_python = crate::mlx_env::ensure_user_python_venv(app, on_progress)?;
-    if mlx_python_has_package(&venv_python) {
+    if crate::mlx_env::python_import_ok(&venv_python, "import parakeet_mlx") {
         if let Ok(cache) = crate::paths::qwen_cache_dir(app) {
             if mlx_ready_marker_exists(&cache) {
                 on_progress("Ускорение уже готово");
@@ -247,26 +237,18 @@ fn install_mlx_runtime_locked(
         }
     } else {
         on_progress("Устанавливаю ускорение Parakeet…");
-        let out = Command::new(&venv_python)
-            .args([
-                "-m",
-                "pip",
-                "install",
-                "--disable-pip-version-check",
-                MLX_PACKAGE,
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .context("Не удалось запустить pip install parakeet-mlx")?;
+        let out = crate::mlx_env::pip_install(
+            &venv_python,
+            &["--disable-pip-version-check", MLX_PACKAGE],
+            "Не удалось запустить pip install parakeet-mlx",
+        )?;
         if !out.status.success() {
             return Err(anyhow!(
                 "Не удалось установить parakeet-mlx: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        if !mlx_python_has_package(&venv_python) {
+        if !crate::mlx_env::python_import_ok(&venv_python, "import parakeet_mlx") {
             return Err(anyhow!("parakeet-mlx не импортируется после установки"));
         }
     }
@@ -284,27 +266,12 @@ fn warmup_mlx_model(app: &AppHandle, python: &Path, on_progress: &impl Fn(&str))
     }
     let tmp = crate::paths::tmp_dir(app)?;
     let warmup_wav = tmp.join("parakeet-mlx-warmup.wav");
-    write_silent_wav(&warmup_wav)?;
+    crate::transcriber::write_silent_wav(&warmup_wav)?;
     on_progress("Прогреваю модель…");
     let result = transcribe_with_mlx(python, &warmup_wav, &|_| {});
     let _ = std::fs::remove_file(&warmup_wav);
     result?;
     write_mlx_ready_marker(&cache_dir)?;
-    Ok(())
-}
-
-fn write_silent_wav(path: &Path) -> Result<()> {
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: SAMPLE_RATE,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(path, spec)?;
-    for _ in 0..SAMPLE_RATE {
-        writer.write_sample::<i16>(0)?;
-    }
-    writer.finalize()?;
     Ok(())
 }
 

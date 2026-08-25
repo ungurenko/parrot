@@ -33,7 +33,7 @@ pub fn save_summary(transcript_path: &Path, summary: &str) -> Result<PathBuf> {
 }
 
 /// Strip control chars and filesystem-hostile characters from a filename stem.
-pub fn sanitize_stem(stem: &str) -> String {
+fn sanitize_stem(stem: &str) -> String {
     let trimmed = stem.trim();
     let mut out = String::with_capacity(trimmed.len());
     for ch in trimmed.chars() {

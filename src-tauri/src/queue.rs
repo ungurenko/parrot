@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
-use crate::cancellation::{CancelRegistry, CancelToken};
+use crate::cancellation::{is_cancelled, CancelRegistry, CancelToken};
 use crate::history::{self, HistoryEntry};
 use crate::{paths, source, transcriber, transcriber_parakeet, transcriber_qwen, writer};
 
@@ -104,6 +104,7 @@ enum PreparedOutcome {
         sequence: u64,
         job: Job,
         message: String,
+        canceled: bool,
     },
 }
 
@@ -225,11 +226,12 @@ async fn prep_worker(
         };
 
         let token = cancel.get(&queued.job.id);
-        if token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+        if is_cancelled(&token) {
             let outcome = PreparedOutcome::Failed {
                 sequence: queued.sequence,
                 job: queued.job,
                 message: CANCELLED_MESSAGE.to_string(),
+                canceled: true,
             };
             if ready_tx.send(outcome).is_err() {
                 break;
@@ -241,7 +243,8 @@ async fn prep_worker(
         let outcome = match prepare_job(&app, queued.clone(), token.clone()).await {
             Ok(prepared) => PreparedOutcome::Ready(prepared),
             Err(e) => {
-                let message = if token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+                let canceled = is_cancelled(&token);
+                let message = if canceled {
                     CANCELLED_MESSAGE.to_string()
                 } else {
                     format!("{e:#}")
@@ -250,6 +253,7 @@ async fn prep_worker(
                     sequence: queued.sequence,
                     job: queued.job,
                     message,
+                    canceled,
                 }
             }
         };
@@ -294,7 +298,7 @@ async fn handle_prepared_outcome(
             let job = prepared.job.clone();
             let wav_path = prepared.wav_path.clone();
             let token = cancel.get(&job.id);
-            if token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+            if is_cancelled(&token) {
                 emit_canceled(app, &job);
                 cancel.remove(&job.id);
                 cleanup_wav(&prepared.wav_path);
@@ -335,14 +339,10 @@ async fn handle_prepared_outcome(
                     cancel.remove(&job.id);
                 }
                 Err(e) => {
-                    let message = if token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
-                        CANCELLED_MESSAGE.to_string()
-                    } else {
-                        format!("{e:#}")
-                    };
-                    if message == CANCELLED_MESSAGE {
+                    if is_cancelled(&token) {
                         emit_canceled(app, &job);
                     } else {
+                        let message = format!("{e:#}");
                         tracing::error!("job {} failed: {message}", job.id);
                         emit_error(app, &job, message);
                     }
@@ -351,8 +351,13 @@ async fn handle_prepared_outcome(
                 }
             }
         }
-        PreparedOutcome::Failed { job, message, .. } => {
-            if message == CANCELLED_MESSAGE {
+        PreparedOutcome::Failed {
+            job,
+            message,
+            canceled,
+            ..
+        } => {
+            if canceled {
                 emit_canceled(app, &job);
             } else {
                 tracing::error!("job {} failed: {message}", job.id);
@@ -531,7 +536,7 @@ async fn transcribe_prepared(
         h.abort();
     }
     let text = text??;
-    if token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+    if is_cancelled(&token) {
         cleanup_wav(&wav_path);
         anyhow::bail!("cancelled");
     }
@@ -553,30 +558,34 @@ async fn transcribe_prepared(
     Ok((text, out))
 }
 
-pub(crate) fn ensure_model_ready(app: &AppHandle, engine: &str) -> Result<()> {
+pub(crate) fn is_supported_engine(engine: &str) -> bool {
+    engine == "parakeet" || engine == "whisper" || transcriber_qwen::is_qwen_engine(engine)
+}
+
+pub(crate) fn unknown_engine_error(engine: &str) -> String {
+    format!("Неизвестный движок транскрибации: {engine}")
+}
+
+fn model_missing_message(engine: &str) -> String {
     match engine {
         "parakeet" => {
-            if !paths::parakeet_files_ready(app) {
-                anyhow::bail!(
-                    "Модель Parakeet не скачана. Откройте настройки и нажмите «Скачать модель»."
-                );
-            }
+            "Модель Parakeet не скачана. Откройте настройки и нажмите «Скачать модель».".to_string()
         }
         "whisper" => {
-            if !paths::whisper_files_ready(app) {
-                anyhow::bail!(
-                    "Модель Whisper не скачана. Откройте настройки и нажмите «Скачать модель»."
-                );
-            }
+            "Модель Whisper не скачана. Откройте настройки и нажмите «Скачать модель».".to_string()
         }
-        engine if transcriber_qwen::is_qwen_engine(engine) => {
-            if !transcriber_qwen::is_ready(app, engine) {
-                anyhow::bail!(
-                    "Qwen MLX еще не готов. Откройте настройки и нажмите «Подготовить модель»."
-                );
-            }
+        _ => {
+            "Qwen MLX еще не готов. Откройте настройки и нажмите «Подготовить модель».".to_string()
         }
-        other => anyhow::bail!("Неизвестный движок транскрибации: {other}"),
+    }
+}
+
+pub(crate) fn ensure_model_ready(app: &AppHandle, engine: &str) -> Result<()> {
+    if !is_supported_engine(engine) {
+        anyhow::bail!(unknown_engine_error(engine));
+    }
+    if !crate::commands::models::is_model_ready_for_engine(app, engine) {
+        anyhow::bail!(model_missing_message(engine));
     }
     Ok(())
 }
@@ -601,7 +610,7 @@ pub(crate) fn transcribe_wav_for_engine(
         engine if transcriber_qwen::is_qwen_engine(engine) => {
             transcriber_qwen::transcribe_wav(app, wav_path, engine, language, cancel, progress)
         }
-        other => anyhow::bail!("Неизвестный движок транскрибации: {other}"),
+        other => anyhow::bail!(unknown_engine_error(other)),
     }
 }
 

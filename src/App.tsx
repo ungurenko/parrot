@@ -21,11 +21,12 @@ import {
   cleanupTauriListeners,
   isTauriRuntime,
   listenInTauri,
+  previewSettings,
 } from "./lib/runtime";
+import { SHORTCUT_GLYPH, displayShortcut } from "./lib/shortcuts";
 import { modeOptionForEngine } from "./lib/engineModes";
 import { formatErrorDescription, userErrorFrom } from "./lib/userErrors";
 import {
-  DEFAULT_SUMMARY_MODEL,
   type DictationPhase,
   type DictationStatus,
   type HistoryEntry,
@@ -37,19 +38,6 @@ type ViewState =
   | { kind: "empty" }
   | { kind: "processing"; job: Job }
   | { kind: "result"; job: Job };
-
-const BROWSER_PREVIEW_SETTINGS: Settings = {
-  save_dir: "",
-  onboarded: true,
-  engine: "parakeet",
-  language: "ru",
-  summarizer_enabled: false,
-  summary_model: DEFAULT_SUMMARY_MODEL,
-  summarizer_promo_seen: true,
-  dictation_enabled: true,
-  dictation_hold_key: "Alt+Space",
-  theme: "system",
-};
 
 const PREVIEW_NOTES = [
   "## 🎯 Что нового",
@@ -76,48 +64,24 @@ const PREVIEW_UPDATER: AutoUpdate = {
   install: async () => {},
 };
 
+const isActiveJob = (j: Job) =>
+  j.status === "running" || j.status === "queued" || j.status === "canceling";
+
 function pickView(jobs: Job[], selectedId: string | null): ViewState {
   const selected = selectedId ? jobs.find((j) => j.id === selectedId) : null;
 
   if (selected) {
-    if (
-      selected.status === "running" ||
-      selected.status === "queued" ||
-      selected.status === "canceling"
-    ) {
+    if (isActiveJob(selected)) {
       return { kind: "processing", job: selected };
     }
     return { kind: "result", job: selected };
   }
 
-  const active = jobs.find(
-    (j) =>
-      j.status === "running" ||
-      j.status === "queued" ||
-      j.status === "canceling",
-  );
+  const active = jobs.find(isActiveJob);
   if (active) return { kind: "processing", job: active };
 
   return { kind: "empty" };
 }
-
-function displayShortcut(shortcut: string): string {
-  return shortcut
-    .split("+")
-    .map((part) => (part.trim() === "Alt" ? "Option" : part.trim()))
-    .join("+");
-}
-
-const SHORTCUT_GLYPH: Record<string, string> = {
-  Cmd: "⌘",
-  Command: "⌘",
-  Meta: "⌘",
-  Shift: "⇧",
-  Option: "⌥",
-  Alt: "⌥",
-  Ctrl: "⌃",
-  Control: "⌃",
-};
 
 function parseShortcut(shortcut: string): string[] {
   return shortcut
@@ -164,7 +128,7 @@ function App() {
   useEffect(() => {
     (async () => {
       if (!isTauriRuntime()) {
-        setSettings(BROWSER_PREVIEW_SETTINGS);
+        setSettings(previewSettings(""));
         setNeedsOnboarding(false);
         setDictationPhase("idle");
         return;
@@ -374,23 +338,13 @@ function App() {
     [deleteEntry],
   );
 
-  const view = useMemo(() => pickView(historyJob ? [historyJob, ...jobs] : jobs, selectedId), [historyJob, jobs, selectedId]);
-
-  const hasActiveJob = useMemo(
-    () =>
-      jobs.some(
-        (j) =>
-          j.status === "running" ||
-          j.status === "queued" ||
-          j.status === "canceling",
-      ),
-    [jobs],
-  );
-
   const queueJobs = useMemo(
     () => (historyJob ? jobs.filter((j) => j.id !== historyJob.id) : jobs),
     [jobs, historyJob],
   );
+  const view = useMemo(() => pickView(historyJob ? [historyJob, ...jobs] : jobs, selectedId), [historyJob, jobs, selectedId]);
+
+  const hasActiveJob = useMemo(() => jobs.some(isActiveJob), [jobs]);
 
   const openSettings = useCallback((tab: SettingsTab = "basic") => {
     setSettingsTab(tab);

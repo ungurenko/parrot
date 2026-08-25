@@ -112,12 +112,7 @@ export interface SummarizerStatus {
 export type DictationPhase = "idle" | "recording" | "processing" | "error";
 
 export interface DictationStatus {
-  enabled: boolean;
-  holdKey: string;
   phase: DictationPhase;
-  listenerStarted: boolean;
-  registeredShortcut?: string | null;
-  lastError?: string | null;
 }
 
 export type SummaryModel = "qwen3-4b" | "gemma4-e2b";
@@ -138,6 +133,13 @@ export const SUMMARY_MODEL_BADGE: Record<SummaryModel, string> = {
 };
 
 export const DEFAULT_SUMMARY_MODEL: SummaryModel = "qwen3-4b";
+
+export const CANCELLED_MARKER = "Отменено пользователем";
+
+export const ACTIVE_JOB_SWITCH_HINT =
+  "Дождитесь окончания транскрибации, чтобы сменить модель.";
+export const ACTIVE_JOB_DELETE_HINT =
+  "Дождитесь окончания транскрибации, чтобы удалить модель.";
 
 export interface HistoryEntry {
   id: string;

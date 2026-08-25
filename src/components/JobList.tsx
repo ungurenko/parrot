@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { formatErrorDescription, userErrorFrom } from "@/lib/userErrors";
 import { cn } from "@/lib/utils";
-import type { Job } from "../types";
+import { CANCELLED_MARKER, type Job } from "../types";
 
 interface Props {
   jobs: Job[];
@@ -9,8 +9,6 @@ interface Props {
   onCancel: (id: string) => void;
   selectedId: string | null;
 }
-
-const CANCELLED_MARKER = "Отменено пользователем";
 
 function statusText(job: Job): string {
   if (job.status === "queued") return "В очереди";

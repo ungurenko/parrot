@@ -17,15 +17,10 @@ use tauri::AppHandle;
 use std::os::fd::AsRawFd;
 
 use crate::cancellation::CancelToken;
-use crate::fs_metrics::dir_size_bytes;
 use crate::prompts;
 use crate::{mlx_env, paths, settings, summarizer_models};
 use summarizer_models::{SummaryModelSpec, SummaryRuntime};
 
-const SERVER_HOST: &str = "127.0.0.1";
-const SERVER_START_TIMEOUT: Duration = Duration::from_secs(90);
-const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-const HEALTH_TIMEOUT: Duration = Duration::from_millis(700);
 const SERVER_LOCK_FILE: &str = "summary-server.lock";
 const SERVER_REGISTRY_FILE: &str = "summary-server.json";
 const SHARED_SERVER_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -42,12 +37,7 @@ const SUMMARY_MLX_PACKAGES: [&str; 3] = ["mlx==0.31.1", "mlx-lm==0.31.2", "mlx-v
 static SUMMARY_SERVER: Lazy<Mutex<Option<SummaryServer>>> = Lazy::new(|| Mutex::new(None));
 static SERVER_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = Lazy::new(|| {
     reqwest::blocking::Client::builder()
-        .timeout(SERVER_REQUEST_TIMEOUT)
-        .build()
-});
-static HEALTH_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = Lazy::new(|| {
-    reqwest::blocking::Client::builder()
-        .timeout(HEALTH_TIMEOUT)
+        .timeout(mlx_env::SERVER_REQUEST_TIMEOUT)
         .build()
 });
 
@@ -111,7 +101,7 @@ struct SummaryServer {
 
 impl SummaryServer {
     fn url(&self) -> String {
-        format!("http://{SERVER_HOST}:{}", self.record.port)
+        format!("http://{}:{}", mlx_env::SERVER_HOST, self.record.port)
     }
 
     fn pid(&self) -> u32 {
@@ -137,7 +127,7 @@ impl SummaryServer {
 
     fn stop(&mut self) {
         if let Some(child) = self.child.as_mut() {
-            let stop_result = stop_child(child);
+            let stop_result = mlx_env::stop_child(child);
             tracing::info!(
                 "summary server stopped (pid={}, port={}, model={}, owned={}, result={})",
                 self.record.pid,
@@ -203,19 +193,8 @@ pub fn model_cache_exists(app: &AppHandle) -> bool {
         return false;
     };
     let spec = selected_model(app);
-    if !ready_marker_exists_for(&cache_dir, spec) {
-        return false;
-    }
-    model_cache_exists_in(&cache_dir, spec)
-}
-
-fn model_cache_exists_in(cache_dir: &Path, spec: &SummaryModelSpec) -> bool {
-    let repo_cache_name = format!("models--{}", spec.repo.replace('/', "--"));
-    let model_dir = cache_dir.join("hub").join(repo_cache_name);
-    if !model_dir.exists() {
-        return false;
-    }
-    dir_size_bytes(&model_dir) >= (spec.expected_bytes as f64 * 0.9) as u64
+    ready_marker_exists_for(&cache_dir, spec)
+        && mlx_env::model_cache_ready(app, spec.repo, spec.expected_bytes)
 }
 
 pub fn delete_model(app: &AppHandle) -> Result<()> {
@@ -223,7 +202,7 @@ pub fn delete_model(app: &AppHandle) -> Result<()> {
     let cache_dir = paths::qwen_cache_dir(app)?;
     let spec = selected_model(app);
     remove_ready_marker_for(&cache_dir, spec);
-    let repo_cache_name = format!("models--{}", spec.repo.replace('/', "--"));
+    let repo_cache_name = mlx_env::repo_cache_name(spec.repo);
     let model_dir = cache_dir.join("hub").join(repo_cache_name);
     if model_dir.is_dir() {
         std::fs::remove_dir_all(&model_dir)?;
@@ -344,7 +323,9 @@ fn ensure_summary_server(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<(S
     let mut guard = SUMMARY_SERVER.lock();
     let spec = selected_model(app);
     if let Some(server) = guard.as_mut() {
-        if server.matches_spec(spec) && server.is_process_alive()? && health_ok(server.record.port)
+        if server.matches_spec(spec)
+            && server.is_process_alive()?
+            && mlx_env::health_ok(server.record.port)
         {
             return Ok((server.url(), server.pid(), true));
         }
@@ -402,7 +383,7 @@ fn ensure_summary_server(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<(S
     let wait_result = wait_for_server(&mut child, port, &cancel);
     cancel.unregister_pid(pid);
     if let Err(e) = wait_result {
-        let stop_result = stop_child(&mut child);
+        let stop_result = mlx_env::stop_child(&mut child);
         tracing::warn!(
             "summary server failed during startup (pid={pid}, port={port}, stop_result={stop_result}): {e:#}"
         );
@@ -410,7 +391,7 @@ fn ensure_summary_server(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<(S
     }
 
     let server_start_time = process_start_time(pid).ok_or_else(|| {
-        let stop_result = stop_child(&mut child);
+        let stop_result = mlx_env::stop_child(&mut child);
         tracing::warn!(
             "summary server PID {pid} has no readable start time; stopped untracked server (result={stop_result})"
         );
@@ -430,7 +411,7 @@ fn ensure_summary_server(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<(S
         owner_start_time: process_start_time(std::process::id()),
     };
     if let Err(error) = write_registry(&registry_path, &record) {
-        let stop_result = stop_child(&mut child);
+        let stop_result = mlx_env::stop_child(&mut child);
         tracing::warn!(
             "summary server registry write failed (pid={pid}, port={port}, stop_result={stop_result}): {error:#}"
         );
@@ -717,7 +698,7 @@ fn run_summary_generate(
         if cancel.is_cancelled() {
             return Err(anyhow!("cancelled"));
         }
-        return Err(command_error(
+        return Err(mlx_env::command_error(
             error_prefix,
             &output.stderr,
             output.status.code(),
@@ -822,7 +803,7 @@ fn build_mlx_lm_server_command(
         .arg("--model")
         .arg(spec.repo)
         .arg("--host")
-        .arg(SERVER_HOST)
+        .arg(mlx_env::SERVER_HOST)
         .arg("--port")
         .arg(port.to_string())
         .arg("--allowed-origins")
@@ -845,7 +826,7 @@ fn build_mlx_vlm_server_command(
         .arg("--model")
         .arg(spec.repo)
         .arg("--host")
-        .arg(SERVER_HOST)
+        .arg(mlx_env::SERVER_HOST)
         .arg("--port")
         .arg(port.to_string())
         .stdout(Stdio::null())
@@ -854,15 +835,8 @@ fn build_mlx_vlm_server_command(
 }
 
 fn mlx_lm_command(python: &Path, cache_dir: &Path) -> Command {
-    let mut cmd = Command::new(python);
+    let mut cmd = mlx_env::python_command(python, cache_dir);
     cmd.arg("-m").arg("mlx_lm");
-    cmd.env("HF_HOME", cache_dir)
-        .env("HF_HUB_DISABLE_TELEMETRY", "1")
-        .env("HF_HUB_DISABLE_XET", "1")
-        .env("PYTHONUNBUFFERED", "1");
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
     cmd
 }
 
@@ -875,44 +849,26 @@ fn mlx_vlm_server_command(python: &Path, cache_dir: &Path) -> Command {
 }
 
 fn mlx_vlm_command(python: &Path, cache_dir: &Path, subcommand: &str) -> Command {
-    let mut cmd = Command::new(python);
+    let mut cmd = mlx_env::python_command(python, cache_dir);
     cmd.arg("-m").arg("mlx_vlm").arg(subcommand);
-    cmd.env("HF_HOME", cache_dir)
-        .env("HF_HUB_DISABLE_TELEMETRY", "1")
-        .env("HF_HUB_DISABLE_XET", "1")
-        .env("PYTHONUNBUFFERED", "1");
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
     cmd
 }
 
 fn wait_for_server(child: &mut Child, port: u16, cancel: &CancelToken) -> Result<()> {
     let started = Instant::now();
-    while started.elapsed() < SERVER_START_TIMEOUT {
+    while started.elapsed() < mlx_env::SERVER_START_TIMEOUT {
         if cancel.is_cancelled() {
             anyhow::bail!("cancelled");
         }
         if let Some(status) = child.try_wait()? {
             return Err(anyhow!("mlx-lm server завершился при запуске: {status}"));
         }
-        if health_ok(port) {
+        if mlx_env::health_ok(port) {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(500));
     }
     Err(anyhow!("mlx-lm server не успел запуститься"))
-}
-
-fn health_ok(port: u16) -> bool {
-    let Ok(client) = health_client() else {
-        return false;
-    };
-    client
-        .get(format!("http://{SERVER_HOST}:{port}/health"))
-        .send()
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
 }
 
 fn server_client() -> Result<&'static reqwest::blocking::Client> {
@@ -921,14 +877,8 @@ fn server_client() -> Result<&'static reqwest::blocking::Client> {
         .map_err(|e| anyhow!("Не удалось создать HTTP-клиент mlx-lm server: {e}"))
 }
 
-fn health_client() -> Result<&'static reqwest::blocking::Client> {
-    HEALTH_CLIENT
-        .as_ref()
-        .map_err(|e| anyhow!("Не удалось создать health-клиент mlx-lm server: {e}"))
-}
-
 fn find_free_port() -> Result<u16> {
-    let listener = std::net::TcpListener::bind((SERVER_HOST, 0))?;
+    let listener = std::net::TcpListener::bind((mlx_env::SERVER_HOST, 0))?;
     Ok(listener.local_addr()?.port())
 }
 
@@ -1090,7 +1040,7 @@ fn wait_for_shared_server(
                 && record.model == spec.repo
                 && record.runtime == runtime_name(spec.runtime)
                 && validate_registry_record(&record).is_some()
-                && health_ok(record.port)
+                && mlx_env::health_ok(record.port)
             {
                 return Some(record);
             }
@@ -1114,7 +1064,7 @@ fn cleanup_registry_record(path: &Path) {
     };
 
     if let Some(snapshot) = validate_registry_record(&record) {
-        let healthy = health_ok(record.port);
+        let healthy = mlx_env::health_ok(record.port);
         tracing::warn!(
             "cleaning stale registered summary server (pid={}, port={}, model={}, runtime={}, health={})",
             record.pid,
@@ -1169,7 +1119,7 @@ fn cleanup_stale_servers_inner(app: &AppHandle) -> Result<()> {
         Ok(Some(record)) => {
             protected_pids.insert(record.pid);
             if let Some(snapshot) = validate_registry_record(&record) {
-                let healthy = health_ok(record.port);
+                let healthy = mlx_env::health_ok(record.port);
                 tracing::warn!(
                     "cleaning registered orphan summary server (pid={}, port={}, model={}, runtime={}, health={})",
                     record.pid,
@@ -1218,7 +1168,7 @@ fn cleanup_stale_servers_inner(app: &AppHandle) -> Result<()> {
             continue;
         };
         found += 1;
-        let healthy = health_ok(port);
+        let healthy = mlx_env::health_ok(port);
         tracing::warn!(
             "cleaning legacy orphan summary server (pid={}, port={}, model={}, runtime={}, health={})",
             snapshot.pid,
@@ -1266,7 +1216,7 @@ fn summary_python_candidates(app: &AppHandle) -> Vec<String> {
     if let Ok(env_dir) = paths::qwen_env_dir(app) {
         add(env_dir.join("bin/python"));
     }
-    for root in candidate_roots() {
+    for root in mlx_env::candidate_roots() {
         add(root.join(".qwen-mlx/venv/bin/python"));
     }
     paths
@@ -1308,7 +1258,7 @@ fn summary_command_matches(
     };
     command.contains(&format!("-m {module} server"))
         && command_arg(command, "--model") == Some(model)
-        && command_arg(command, "--host") == Some(SERVER_HOST)
+        && command_arg(command, "--host") == Some(mlx_env::SERVER_HOST)
         && command_arg(command, "--port").and_then(|value| value.parse().ok()) == Some(port)
 }
 
@@ -1483,29 +1433,6 @@ fn signal_process(pid: u32, signal: libc::c_int) -> io::Result<()> {
     }
 }
 
-fn stop_child(child: &mut Child) -> String {
-    let pid = child.id();
-    match child.try_wait() {
-        Ok(Some(status)) => return format!("already exited ({status})"),
-        Ok(None) => {}
-        Err(error) => return format!("wait before stop failed: {error}"),
-    }
-
-    let term_result = signal_process(pid, libc::SIGTERM);
-    let deadline = Instant::now() + SERVER_STOP_TIMEOUT;
-    while Instant::now() < deadline {
-        match child.try_wait() {
-            Ok(Some(status)) => return format!("SIGTERM -> {status}"),
-            Ok(None) => thread::sleep(Duration::from_millis(100)),
-            Err(error) => return format!("wait after SIGTERM failed: {error}"),
-        }
-    }
-
-    let kill_result = child.kill();
-    let wait_result = child.wait();
-    format!("SIGTERM={term_result:?}, SIGKILL={kill_result:?}, wait={wait_result:?}")
-}
-
 fn resolve_python(app: &AppHandle) -> Result<PathBuf> {
     if let Some(path) = env::var_os("PARROT_QWEN_PYTHON") {
         let p = PathBuf::from(path);
@@ -1535,7 +1462,7 @@ fn resolve_python(app: &AppHandle) -> Result<PathBuf> {
     }
 
     // Repo-local venv created by `tools/setup_qwen_mlx.sh` — the dev path.
-    for root in candidate_roots() {
+    for root in mlx_env::candidate_roots() {
         let path = root.join(".qwen-mlx/venv/bin/python");
         if path.exists() {
             return Ok(path);
@@ -1545,22 +1472,6 @@ fn resolve_python(app: &AppHandle) -> Result<PathBuf> {
     Err(anyhow!(
         "Python venv для конспекта не установлен. Нажмите «Установить окружение» в настройках."
     ))
-}
-
-fn candidate_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(current) = env::current_dir() {
-        roots.push(current.clone());
-        if let Some(parent) = current.parent() {
-            roots.push(parent.to_path_buf());
-        }
-    }
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    roots.push(manifest_dir.clone());
-    if let Some(parent) = manifest_dir.parent() {
-        roots.push(parent.to_path_buf());
-    }
-    roots
 }
 
 /// Bootstrap the user-space MLX venv: ensure Python is downloaded, create
@@ -1575,25 +1486,19 @@ fn install_env_locked<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: &
 
     // Step 2 — upgrade pip (best-effort; skip failure to keep going).
     on_progress("Обновляю pip…");
-    let _ = Command::new(&venv_python)
-        .args(["-m", "pip", "install", "--upgrade", "pip"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
+    let _ = mlx_env::pip_install(&venv_python, &["--upgrade", "pip"], "pip upgrade");
 
     // Step 3 — install MLX runtimes for Qwen and Gemma summaries.
     on_progress("Устанавливаю MLX для Qwen и Gemma…");
-    let out = Command::new(&venv_python)
-        .args(["-m", "pip", "install", "--disable-pip-version-check"])
-        .args(SUMMARY_MLX_PACKAGES)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .context("Не удалось запустить pip install mlx-lm/mlx-vlm")?;
+    let mut pip_args = vec!["--disable-pip-version-check"];
+    pip_args.extend_from_slice(&SUMMARY_MLX_PACKAGES);
+    let out = mlx_env::pip_install(
+        &venv_python,
+        &pip_args,
+        "Не удалось запустить pip install mlx-lm/mlx-vlm",
+    )?;
     if !out.status.success() {
-        return Err(command_error(
+        return Err(mlx_env::command_error(
             "pip install mlx-lm/mlx-vlm завершился с ошибкой",
             &out.stderr,
             out.status.code(),
@@ -1613,7 +1518,7 @@ fn install_env_locked<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: &
         .output()
         .context("Не удалось проверить mlx_lm/mlx_vlm")?;
     if !out.status.success() {
-        return Err(command_error(
+        return Err(mlx_env::command_error(
             "mlx_lm или mlx_vlm не импортируется после установки",
             &out.stderr,
             out.status.code(),
@@ -1641,23 +1546,6 @@ fn remove_ready_marker_for(cache_dir: &Path, spec: &SummaryModelSpec) {
     let _ = std::fs::remove_file(cache_dir.join(spec.ready_marker));
     if spec.id == summarizer_models::QWEN3_4B_SUMMARY.id {
         let _ = std::fs::remove_file(cache_dir.join(LEGACY_QWEN_READY_MARKER));
-    }
-}
-
-fn command_error(prefix: &str, stderr: &[u8], code: Option<i32>) -> anyhow::Error {
-    let tail = String::from_utf8_lossy(stderr)
-        .lines()
-        .rev()
-        .take(20)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>()
-        .join("\n");
-    if tail.trim().is_empty() {
-        anyhow!("{prefix}. Код завершения: {code:?}")
-    } else {
-        anyhow!("{prefix}: {}", tail.trim())
     }
 }
 
@@ -1767,7 +1655,9 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == ["--model", crate::summarizer_models::QWEN3_4B_SUMMARY.repo]));
-        assert!(args.windows(2).any(|pair| pair == ["--host", SERVER_HOST]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--host", mlx_env::SERVER_HOST]));
         assert!(args.windows(2).any(|pair| pair == ["--port", "18181"]));
     }
 
@@ -1789,7 +1679,9 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == ["--model", crate::summarizer_models::GEMMA4_E2B_SUMMARY.repo]));
-        assert!(args.windows(2).any(|pair| pair == ["--host", SERVER_HOST]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--host", mlx_env::SERVER_HOST]));
         assert!(args.windows(2).any(|pair| pair == ["--port", "18182"]));
     }
 

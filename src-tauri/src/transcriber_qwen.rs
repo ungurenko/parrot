@@ -11,8 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
-use crate::cancellation::CancelToken;
-use crate::fs_metrics::dir_size_bytes;
+use crate::cancellation::{is_cancelled, CancelToken};
 use crate::{mlx_env, paths};
 
 pub const ENGINE_QWEN_0_6B: &str = "qwen-0.6b";
@@ -20,10 +19,7 @@ pub const ENGINE_QWEN_1_7B: &str = "qwen-1.7b";
 
 const MODEL_QWEN_0_6B: &str = "Qwen/Qwen3-ASR-0.6B";
 const MODEL_QWEN_1_7B: &str = "Qwen/Qwen3-ASR-1.7B";
-const SERVER_HOST: &str = "127.0.0.1";
 const SERVER_API_KEY: &str = "parrot-local-qwen";
-const SERVER_START_TIMEOUT: Duration = Duration::from_secs(90);
-const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const READY_MARKER_PREFIX: &str = ".parrot-ready";
 const RUNTIME_READY_MARKER: &str = ".parrot-ready-qwen-runtime-0.3.5-mlx-0.31.1";
 const QWEN_RUNTIME_PACKAGES: &[&str] = &["mlx==0.31.1", "mlx-qwen3-asr[serve]==0.3.5"];
@@ -45,12 +41,7 @@ pub const EXPECTED_QWEN_1_7B_BYTES: u64 = 4_703_114_308;
 static SERVER: Lazy<Mutex<Option<QwenServer>>> = Lazy::new(|| Mutex::new(None));
 static SERVER_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = Lazy::new(|| {
     reqwest::blocking::Client::builder()
-        .timeout(SERVER_REQUEST_TIMEOUT)
-        .build()
-});
-static HEALTH_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = Lazy::new(|| {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(700))
+        .timeout(mlx_env::SERVER_REQUEST_TIMEOUT)
         .build()
 });
 
@@ -62,7 +53,7 @@ struct QwenServer {
 
 impl QwenServer {
     fn url(&self) -> String {
-        format!("http://{SERVER_HOST}:{}", self.port)
+        format!("http://{}:{}", mlx_env::SERVER_HOST, self.port)
     }
 
     fn pid(&self) -> u32 {
@@ -70,8 +61,8 @@ impl QwenServer {
     }
 
     fn stop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let result = mlx_env::stop_child(&mut self.child);
+        tracing::info!("Qwen MLX server stop: {result}");
     }
 }
 
@@ -131,23 +122,19 @@ fn install_runtime_locked<F: Fn(&str) + Send + Sync>(
 
     remove_runtime_ready_marker(app);
     on_progress("Устанавливаю Qwen MLX…");
-    let output = Command::new(&venv_python)
-        .args([
-            "-m",
-            "pip",
-            "install",
-            "--disable-pip-version-check",
-            "--upgrade",
-            "--force-reinstall",
-        ])
-        .args(QWEN_RUNTIME_PACKAGES)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .context("Не удалось запустить pip install для Qwen MLX")?;
+    let mut pip_args = vec![
+        "--disable-pip-version-check",
+        "--upgrade",
+        "--force-reinstall",
+    ];
+    pip_args.extend_from_slice(QWEN_RUNTIME_PACKAGES);
+    let output = mlx_env::pip_install(
+        &venv_python,
+        &pip_args,
+        "Не удалось запустить pip install для Qwen MLX",
+    )?;
     if !output.status.success() {
-        return Err(command_error(
+        return Err(mlx_env::command_error(
             "Не удалось установить Qwen MLX",
             &output.stderr,
             output.status.code(),
@@ -220,7 +207,7 @@ pub fn model_cache_dir(app: &AppHandle, engine: &str) -> Result<PathBuf> {
         model_for_engine(engine).ok_or_else(|| anyhow!("unknown Qwen MLX engine: {engine}"))?;
     Ok(paths::qwen_cache_dir(app)?
         .join("hub")
-        .join(format!("models--{}", model.replace('/', "--"))))
+        .join(mlx_env::repo_cache_name(model)))
 }
 
 fn qwen_platform_unavailable_reason(
@@ -278,7 +265,7 @@ pub fn warmup_model(app: &AppHandle, engine: &str, cancel: Arc<CancelToken>) -> 
     let tmp = paths::tmp_dir(app)?;
     let warmup_wav = tmp.join(format!("qwen-warmup-{}.wav", engine.replace('.', "-")));
 
-    write_silent_wav(&warmup_wav)?;
+    crate::transcriber::write_silent_wav(&warmup_wav)?;
     if cancel.is_cancelled() {
         anyhow::bail!("cancelled");
     }
@@ -307,7 +294,7 @@ pub fn warmup_model(app: &AppHandle, engine: &str, cancel: Arc<CancelToken>) -> 
         if cancel.is_cancelled() {
             anyhow::bail!("cancelled");
         }
-        return Err(command_error(
+        return Err(mlx_env::command_error(
             "Qwen MLX не смог подготовить модель",
             &output.stderr,
             output.status.code(),
@@ -356,7 +343,7 @@ pub fn transcribe_wav(
             return Ok(text);
         }
         Err(e) => {
-            if cancel.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+            if is_cancelled(&cancel) {
                 return Err(anyhow!("cancelled"));
             }
             tracing::warn!(
@@ -392,10 +379,10 @@ pub fn transcribe_wav(
     }
 
     if !output.status.success() {
-        if cancel.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+        if is_cancelled(&cancel) {
             return Err(anyhow!("cancelled"));
         }
-        return Err(command_error(
+        return Err(mlx_env::command_error(
             "Qwen MLX не смог расшифровать аудио",
             &output.stderr,
             output.status.code(),
@@ -448,7 +435,10 @@ fn ensure_server_locked(
     guard: &mut Option<QwenServer>,
 ) -> Result<(String, u32)> {
     if let Some(server) = guard.as_mut() {
-        if server.engine == engine && server.child.try_wait()?.is_none() && health_ok(server.port) {
+        if server.engine == engine
+            && server.child.try_wait()?.is_none()
+            && mlx_env::health_ok(server.port)
+        {
             return Ok((server.url(), server.pid()));
         }
     }
@@ -467,7 +457,7 @@ fn ensure_server_locked(
     let mut child = qwen_server_command(&cli, &cache_dir)
         .arg("serve")
         .arg("--host")
-        .arg(SERVER_HOST)
+        .arg(mlx_env::SERVER_HOST)
         .arg("--port")
         .arg(port.to_string())
         .arg("--api-key")
@@ -551,11 +541,11 @@ fn qwen_language(language: &str) -> Option<&'static str> {
 
 fn wait_for_server(child: &mut Child, port: u16) -> Result<()> {
     let started = Instant::now();
-    while started.elapsed() < SERVER_START_TIMEOUT {
+    while started.elapsed() < mlx_env::SERVER_START_TIMEOUT {
         if let Some(status) = child.try_wait()? {
             return Err(anyhow!("Qwen MLX server exited during startup: {status}"));
         }
-        if health_ok(port) {
+        if mlx_env::health_ok(port) {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(500));
@@ -565,55 +555,28 @@ fn wait_for_server(child: &mut Child, port: u16) -> Result<()> {
     Err(anyhow!("Qwen MLX server startup timed out"))
 }
 
-fn health_ok(port: u16) -> bool {
-    let Ok(client) = health_client() else {
-        return false;
-    };
-    client
-        .get(format!("http://{SERVER_HOST}:{port}/health"))
-        .send()
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
-}
-
 fn server_client() -> Result<&'static reqwest::blocking::Client> {
     SERVER_CLIENT
         .as_ref()
         .map_err(|e| anyhow!("failed to create Qwen server HTTP client: {e}"))
 }
 
-fn health_client() -> Result<&'static reqwest::blocking::Client> {
-    HEALTH_CLIENT
-        .as_ref()
-        .map_err(|e| anyhow!("failed to create Qwen health HTTP client: {e}"))
-}
-
 fn find_free_port() -> Result<u16> {
-    let listener = std::net::TcpListener::bind((SERVER_HOST, 0))?;
+    let listener = std::net::TcpListener::bind((mlx_env::SERVER_HOST, 0))?;
     Ok(listener.local_addr()?.port())
 }
 
 fn model_cache_ready(app: &AppHandle, engine: &str) -> bool {
-    let Ok(cache_dir) = paths::qwen_cache_dir(app) else {
-        return false;
-    };
-    model_cache_exists_in(&cache_dir, engine) && ready_marker_exists(&cache_dir, engine)
-}
-
-fn model_cache_exists_in(cache_dir: &Path, engine: &str) -> bool {
     let Some(model) = model_for_engine(engine) else {
         return false;
     };
-    let repo_cache_name = format!("models--{}", model.replace('/', "--"));
-    let model_dir = cache_dir.join("hub").join(repo_cache_name);
-    if !model_dir.exists() {
-        return false;
-    }
-    // Guard against partial downloads: require at least 90% of expected size.
     let Some(expected) = expected_bytes_for_engine(engine) else {
         return false;
     };
-    dir_size_bytes(&model_dir) >= (expected as f64 * 0.9) as u64
+    let Ok(cache_dir) = paths::qwen_cache_dir(app) else {
+        return false;
+    };
+    mlx_env::model_cache_ready(app, model, expected) && ready_marker_exists(&cache_dir, engine)
 }
 
 fn write_ready_marker(cache_dir: &Path, engine: &str) -> Result<()> {
@@ -654,7 +617,7 @@ fn resolve_cli(app: &AppHandle) -> Result<PathBuf> {
     resolve_cli_from_candidates(
         explicit,
         app_venv_cli,
-        &candidate_roots(),
+        &mlx_env::candidate_roots(),
         env::var_os("PATH"),
     )
 }
@@ -695,25 +658,6 @@ fn resolve_cli_from_candidates(
     ))
 }
 
-fn candidate_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-
-    if let Ok(current) = env::current_dir() {
-        roots.push(current.clone());
-        if let Some(parent) = current.parent() {
-            roots.push(parent.to_path_buf());
-        }
-    }
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    roots.push(manifest_dir.clone());
-    if let Some(parent) = manifest_dir.parent() {
-        roots.push(parent.to_path_buf());
-    }
-
-    roots
-}
-
 fn find_in_path_var(name: &str, path_var: Option<OsString>) -> Option<PathBuf> {
     let path_var = path_var?;
     env::split_paths(&path_var)
@@ -722,53 +666,13 @@ fn find_in_path_var(name: &str, path_var: Option<OsString>) -> Option<PathBuf> {
 }
 
 fn qwen_command(cli: &Path, cache_dir: &Path) -> Command {
-    let mut command = Command::new(cli);
-    command
-        .env("HF_HOME", cache_dir)
-        .env("HF_HUB_DISABLE_TELEMETRY", "1")
-        .env("HF_HUB_DISABLE_XET", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    command
+    mlx_env::python_command(cli, cache_dir)
 }
 
 fn qwen_server_command(cli: &Path, cache_dir: &Path) -> Command {
     let mut command = qwen_command(cli, cache_dir);
     command.stdout(Stdio::null()).stderr(Stdio::null());
     command
-}
-
-fn command_error(prefix: &str, stderr: &[u8], code: Option<i32>) -> anyhow::Error {
-    let tail = String::from_utf8_lossy(stderr)
-        .lines()
-        .rev()
-        .take(20)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>()
-        .join("\n");
-    if tail.trim().is_empty() {
-        anyhow!("{prefix}. Код завершения: {code:?}")
-    } else {
-        anyhow!("{prefix}: {}", tail.trim())
-    }
-}
-
-fn write_silent_wav(path: &Path) -> Result<()> {
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: 16_000,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(path, spec)?;
-    for _ in 0..16_000 {
-        writer.write_sample::<i16>(0)?;
-    }
-    writer.finalize()?;
-    Ok(())
 }
 
 #[cfg(test)]

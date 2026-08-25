@@ -52,6 +52,10 @@ impl CancelToken {
     }
 }
 
+pub(crate) fn is_cancelled(token: &Option<Arc<CancelToken>>) -> bool {
+    token.as_ref().is_some_and(|t| t.is_cancelled())
+}
+
 #[derive(Clone, Default)]
 pub struct CancelRegistry {
     inner: Arc<Mutex<HashMap<String, Arc<CancelToken>>>>,

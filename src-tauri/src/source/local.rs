@@ -7,7 +7,7 @@ use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 use crate::binaries;
-use crate::cancellation::CancelToken;
+use crate::cancellation::{is_cancelled, CancelToken};
 
 const FFMPEG_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
@@ -19,11 +19,11 @@ pub async fn extract_wav(
     cancel: Option<Arc<CancelToken>>,
 ) -> Result<PathBuf> {
     if is_normalized_wav(input) {
-        if cancel.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+        if is_cancelled(&cancel) {
             return Err(anyhow!("cancelled"));
         }
         stage_normalized_wav(input, out_wav)?;
-        if cancel.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+        if is_cancelled(&cancel) {
             let _ = tokio::fs::remove_file(out_wav).await;
             return Err(anyhow!("cancelled"));
         }
@@ -69,7 +69,7 @@ pub async fn extract_wav(
         tok.unregister_pid(pid);
     }
     if !output.status.success() {
-        if cancel.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+        if is_cancelled(&cancel) {
             return Err(anyhow!("cancelled"));
         }
         return Err(anyhow!(

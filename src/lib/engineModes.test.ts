@@ -10,7 +10,6 @@ describe("engineModes", () => {
 
     expect(fast?.title).toBe("Быстро");
     expect(fast?.technicalName).toBe("Parakeet V3");
-    expect(fast?.primary).toBe(true);
   });
 
   it("shows the user-friendly name for a stored engine id", () => {

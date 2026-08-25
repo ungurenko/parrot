@@ -9,7 +9,7 @@ use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 use crate::binaries;
-use crate::cancellation::CancelToken;
+use crate::cancellation::{is_cancelled, CancelToken};
 
 // YouTube усилила anti-bot защиту: client `android_vr` теперь падает с
 // "Sign in to confirm you're not a bot". Используем цепочку клиентов
@@ -49,7 +49,7 @@ pub async fn download_wav(
     {
         Ok(result) => result,
         Err(fast_err) => {
-            if cancel.as_ref().map(|t| t.is_cancelled()).unwrap_or(false) {
+            if is_cancelled(&cancel) {
                 return Err(fast_err);
             }
             tracing::warn!(

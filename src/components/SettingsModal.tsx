@@ -26,6 +26,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
+  ACTIVE_JOB_DELETE_HINT,
+  ACTIVE_JOB_SWITCH_HINT,
   DEFAULT_SUMMARY_MODEL,
   ENGINE_LABEL,
   LANGUAGE_LABEL,
@@ -52,8 +54,10 @@ import {
   cleanupTauriListeners,
   isTauriRuntime,
   listenInTauri,
+  previewSettings,
 } from "@/lib/runtime";
 import { formatErrorDescription, isCancelledError } from "@/lib/userErrors";
+import { displayShortcut } from "@/lib/shortcuts";
 import {
   DatabaseIcon,
   DownloadIcon,
@@ -77,10 +81,6 @@ interface Props {
   initialTab?: SettingsTab;
 }
 
-const ACTIVE_JOB_HINT =
-  "Дождитесь окончания транскрибации, чтобы сменить модель.";
-const ACTIVE_JOB_DELETE_HINT =
-  "Дождитесь окончания транскрибации, чтобы удалить модель.";
 
 type ShortcutKeyboardEvent = {
   key: string;
@@ -98,19 +98,6 @@ export type SettingsTab = "basic" | "models" | "dictation" | "summary" | "update
 
 const ACCESSIBILITY_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-
-const PREVIEW_SETTINGS: Settings = {
-  save_dir: "~/Documents/Parrot",
-  onboarded: true,
-  engine: "parakeet",
-  language: "ru",
-  summarizer_enabled: false,
-  summary_model: DEFAULT_SUMMARY_MODEL,
-  summarizer_promo_seen: true,
-  dictation_enabled: true,
-  dictation_hold_key: "Alt+Space",
-  theme: "system",
-};
 
 const PREVIEW_ENGINE_STATUSES: EngineStatuses = {
   parakeet: { available: true, modelReady: true },
@@ -746,13 +733,6 @@ function isModifierOnlyKey(key: string): boolean {
   return ["meta", "alt", "control", "shift"].includes(key.toLowerCase());
 }
 
-function displayShortcut(shortcut: string): string {
-  return shortcut
-    .split("+")
-    .map((part) => (part.trim() === "Alt" ? "Option" : part.trim()))
-    .join("+");
-}
-
 function displayShortcutParts(shortcut: string): string[] {
   return displayShortcut(shortcut)
     .split("+")
@@ -825,7 +805,7 @@ export function SettingsModal({
 
   useEffect(() => {
     if (!isTauriRuntime()) {
-      setSettings(PREVIEW_SETTINGS);
+      setSettings(previewSettings("~/Documents/Parrot"));
       setAppVersion("preview");
       setModelStatuses(PREVIEW_ENGINE_STATUSES);
       setSummarizerStatus({ available: true, modelReady: false });
@@ -900,7 +880,7 @@ export function SettingsModal({
     if (!settings) return;
     if (engine === settings.engine) return;
     if (engine !== settings.engine && hasActiveJob) {
-      setSettingsError(ACTIVE_JOB_HINT);
+      setSettingsError(ACTIVE_JOB_SWITCH_HINT);
       return;
     }
     if (!modelStatuses[engine]?.modelReady) {
@@ -927,7 +907,7 @@ export function SettingsModal({
 
   const prepareModel = async (engine: Engine) => {
     if (hasActiveJob) {
-      setSettingsError(ACTIVE_JOB_HINT);
+      setSettingsError(ACTIVE_JOB_SWITCH_HINT);
       return;
     }
     if (previewMode) {

@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::LazyLock;
 use std::time::Duration;
 use tar::Archive;
 use tauri::AppHandle;
@@ -21,6 +22,154 @@ const STANDALONE_PYTHON_BYTES: u64 = 17_836_558;
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
+
+// Shared warm-server HTTP plumbing (Qwen ASR and summary servers).
+pub(crate) const SERVER_HOST: &str = "127.0.0.1";
+pub(crate) const SERVER_START_TIMEOUT: Duration = Duration::from_secs(90);
+pub(crate) const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const HEALTH_TIMEOUT: Duration = Duration::from_millis(700);
+static HEALTH_CLIENT: LazyLock<Result<reqwest::blocking::Client, reqwest::Error>> =
+    LazyLock::new(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(HEALTH_TIMEOUT)
+            .build()
+    });
+
+pub(crate) fn health_ok(port: u16) -> bool {
+    let Ok(client) = HEALTH_CLIENT.as_ref() else {
+        return false;
+    };
+    client
+        .get(format!("http://{SERVER_HOST}:{port}/health"))
+        .send()
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
+const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) fn signal_process(pid: u32, signal: libc::c_int) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::kill(pid as libc::pid_t, signal) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, signal);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "process signals are unavailable on this platform",
+        ))
+    }
+}
+
+/// Terminate a warm-server child: SIGTERM, wait up to [`STOP_TIMEOUT`], then
+/// SIGKILL. Returns a human-readable outcome for logs.
+pub(crate) fn stop_child(child: &mut std::process::Child) -> String {
+    use std::time::Instant;
+
+    let pid = child.id();
+    match child.try_wait() {
+        Ok(Some(status)) => return format!("already exited ({status})"),
+        Ok(None) => {}
+        Err(error) => return format!("wait before stop failed: {error}"),
+    }
+
+    let term_result = signal_process(pid, libc::SIGTERM);
+    let deadline = Instant::now() + STOP_TIMEOUT;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(status)) => return format!("SIGTERM -> {status}"),
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(error) => return format!("wait after SIGTERM failed: {error}"),
+        }
+    }
+
+    let kill_result = child.kill();
+    let wait_result = child.wait();
+    format!("SIGTERM={term_result:?}, SIGKILL={kill_result:?}, wait={wait_result:?}")
+}
+
+/// Dev-mode lookup roots for repo-local MLX venvs (cwd, its parent, crate dir
+/// and its parent). Production installs resolve through Application Support.
+pub(crate) fn candidate_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(current) = std::env::current_dir() {
+        roots.push(current.clone());
+        if let Some(parent) = current.parent() {
+            roots.push(parent.to_path_buf());
+        }
+    }
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    roots.push(manifest_dir.clone());
+    if let Some(parent) = manifest_dir.parent() {
+        roots.push(parent.to_path_buf());
+    }
+    roots
+}
+
+/// Run `<python> -m pip install <args>` with the shared stdio plumbing.
+pub(crate) fn pip_install(
+    python: &Path,
+    args: &[&str],
+    context: &str,
+) -> Result<std::process::Output> {
+    Command::new(python)
+        .args(["-m", "pip", "install"])
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context(context.to_string())
+}
+
+/// Base command for MLX Python CLIs: HF cache pointed at the shared cache
+/// dir, hub telemetry/xet off, unbuffered output.
+pub(crate) fn python_command(python: &Path, cache_dir: &Path) -> Command {
+    let mut cmd = Command::new(python);
+    cmd.env("HF_HOME", cache_dir)
+        .env("HF_HUB_DISABLE_TELEMETRY", "1")
+        .env("HF_HUB_DISABLE_XET", "1")
+        .env("PYTHONUNBUFFERED", "1");
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd
+}
+
+/// HuggingFace hub cache directory name for a repo id (`org/name`).
+pub(crate) fn repo_cache_name(repo: &str) -> String {
+    format!("models--{}", repo.replace('/', "--"))
+}
+
+/// True when the repo's hub cache holds ≥90% of the expected bytes — guards
+/// against running on partially downloaded weights.
+pub(crate) fn model_cache_ready(app: &AppHandle, repo: &str, expected_bytes: u64) -> bool {
+    let Ok(cache_dir) = paths::qwen_cache_dir(app) else {
+        return false;
+    };
+    let model_dir = cache_dir.join("hub").join(repo_cache_name(repo));
+    model_dir.exists()
+        && crate::fs_metrics::dir_size_bytes(&model_dir) >= (expected_bytes as f64 * 0.9) as u64
+}
+
+/// Cheap `-c "<code>"` probe; true when the interpreter exits successfully.
+pub(crate) fn python_import_ok(python: &Path, code: &str) -> bool {
+    Command::new(python)
+        .args(["-c", code])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
 
 /// Serialize all mutations of the shared MLX venv. Parakeet, Qwen ASR and
 /// summaries use the same Python environment, and parallel pip processes can
@@ -191,7 +340,7 @@ fn extract_tar_gz(archive: &Path, dest_parent: &Path) -> Result<()> {
     Ok(())
 }
 
-fn command_error(prefix: &str, stderr: &[u8], code: Option<i32>) -> anyhow::Error {
+pub(crate) fn command_error(prefix: &str, stderr: &[u8], code: Option<i32>) -> anyhow::Error {
     let tail = String::from_utf8_lossy(stderr)
         .lines()
         .rev()

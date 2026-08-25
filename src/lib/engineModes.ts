@@ -14,7 +14,6 @@ export interface EngineModeOption {
   technicalName: string;
   size: string;
   badge?: string;
-  primary?: boolean;
 }
 
 export const ENGINE_MODES: EngineModeOption[] = [
@@ -27,7 +26,6 @@ export const ENGINE_MODES: EngineModeOption[] = [
     technicalName: ENGINE_LABEL.parakeet,
     size: ENGINE_SIZE.parakeet,
     badge: "рекомендуется",
-    primary: true,
   },
   {
     id: "manyLanguages",

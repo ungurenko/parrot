@@ -73,10 +73,9 @@ fn get_settings(app: AppHandle) -> Settings {
 
 #[tauri::command]
 fn get_dictation_status(
-    app: AppHandle,
     dictation: State<'_, dictation::DictationManager>,
 ) -> dictation::DictationStatus {
-    dictation.status(&app)
+    dictation.status()
 }
 
 #[tauri::command]
@@ -342,7 +341,6 @@ pub fn run() {
             set_settings,
             commands::models::is_model_ready,
             commands::models::get_engine_statuses,
-            commands::models::download_model,
             commands::models::download_model_for_engine,
             commands::models::cancel_model_prepare,
             commands::models::delete_model_for_engine,

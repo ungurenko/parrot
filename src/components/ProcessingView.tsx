@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import parrotImg from "/parrot.png";
 import { processingProgressMessage } from "@/lib/progressEstimate";
-import type { Job } from "../types";
+import { CANCELLED_MARKER, type Job } from "../types";
 
 interface Props {
   job: Job;
   onCancel: (id: string) => void;
 }
 
-const CANCELLED_MARKER = "Отменено пользователем";
 function statusText(job: Job): string {
   if (job.status === "queued") return "В очереди…";
   if (job.status === "canceling") return "Отменяю…";

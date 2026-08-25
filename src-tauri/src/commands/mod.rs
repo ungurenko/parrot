@@ -39,6 +39,33 @@ pub(crate) fn spawn_model_progress_poller(
     })
 }
 
+pub(crate) async fn run_model_warmup(
+    app: AppHandle,
+    cache_dir: PathBuf,
+    expected_bytes: u64,
+    progress_event: &'static str,
+    stage_event: &'static str,
+    warmup: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+) -> Result<(), String> {
+    let _ = app.emit(progress_event, 1u32);
+    let _ = app.emit(stage_event, "downloading");
+    let poll_handle = spawn_model_progress_poller(
+        app.clone(),
+        cache_dir,
+        expected_bytes,
+        progress_event,
+        stage_event,
+    );
+    let result = tauri::async_runtime::spawn_blocking(warmup).await;
+    poll_handle.abort();
+    result
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit(stage_event, "ready");
+    let _ = app.emit(progress_event, 100u32);
+    Ok(())
+}
+
 fn download_percent(size: u64, expected_bytes: u64) -> u32 {
     ((size as f64 / expected_bytes as f64) * 95.0).clamp(1.0, 95.0) as u32
 }

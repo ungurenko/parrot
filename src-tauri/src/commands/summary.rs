@@ -4,7 +4,6 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::spawn_model_progress_poller;
 use crate::{history, paths, summarizer_qwen3, writer};
 use crate::{validate_saved_file_path, AppState, CancelRegistryGuard, SavedFileKind};
 
@@ -67,33 +66,19 @@ pub(crate) async fn download_summarizer_model(
         .try_create(&task_id)
         .ok_or_else(|| "Модель конспекта уже подготавливается".to_string())?;
     let _task_guard = CancelRegistryGuard::new(state.model_cancel.clone(), task_id);
-    let _ = app.emit("summary_model:progress", 1u32);
-    let _ = app.emit("summary_model:stage", "downloading");
-
     let expected_bytes = summarizer_qwen3::expected_summary_bytes(&app);
     let cache_dir = paths::qwen_cache_dir(&app).map_err(|e| e.to_string())?;
-    let poll_handle = spawn_model_progress_poller(
+    let app_for_task = app.clone();
+    let token_for_task = token.clone();
+    super::run_model_warmup(
         app.clone(),
         cache_dir,
         expected_bytes,
         "summary_model:progress",
         "summary_model:stage",
-    );
-
-    let app_for_task = app.clone();
-    let token_for_task = token.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        summarizer_qwen3::warmup_model(&app_for_task, token_for_task)
-    })
-    .await;
-    poll_handle.abort();
-    let result = match result {
-        Ok(inner) => inner.map_err(|e| e.to_string()),
-        Err(e) => Err(e.to_string()),
-    };
-    result?;
-    let _ = app.emit("summary_model:stage", "ready");
-    let _ = app.emit("summary_model:progress", 100u32);
+        move || summarizer_qwen3::warmup_model(&app_for_task, token_for_task),
+    )
+    .await?;
     summarizer_qwen3::preload_server(app.clone());
     Ok(())
 }

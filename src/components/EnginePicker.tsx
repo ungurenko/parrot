@@ -11,6 +11,8 @@ import { ENGINE_MODES } from "@/lib/engineModes";
 import { modelProgressMessage } from "@/lib/progressEstimate";
 import { Trash2Icon } from "lucide-react";
 import {
+  ACTIVE_JOB_DELETE_HINT,
+  ACTIVE_JOB_SWITCH_HINT,
   type Engine,
   type EngineStatuses,
   type ModelProgressDetail,
@@ -31,18 +33,6 @@ interface Props {
   onPrepare?: (engine: Engine) => void;
   onDelete?: (engine: Engine) => void;
 }
-
-const ACTIVE_JOB_SWITCH_HINT =
-  "Дождитесь окончания транскрибации, чтобы сменить модель";
-const ACTIVE_JOB_DELETE_HINT =
-  "Дождитесь окончания транскрибации, чтобы удалить модель";
-
-const progressText = (
-  progress: number,
-  stage: ModelStage,
-) => {
-  return modelProgressMessage({ stage, percent: progress }).title;
-};
 
 const unavailableText = (reason?: string | null) =>
   reason?.trim() || null;
@@ -219,7 +209,7 @@ export function EnginePicker({
                   Отменить
                 </Button>
                 <div className="break-words text-xs leading-relaxed text-muted-foreground">
-                  {progressText(progress, stage)}
+                  {modelProgressMessage({ stage, percent: progress }).title}
                 </div>
                 <div className="break-words text-xs leading-relaxed text-muted-foreground">
                   {calmProgress.detail}

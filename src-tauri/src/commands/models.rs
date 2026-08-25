@@ -5,7 +5,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::cancellation;
-use crate::commands::spawn_model_progress_poller;
+use crate::queue::unknown_engine_error;
 use crate::{model, paths, preload_active_engine, settings, transcriber, transcriber_parakeet};
 use crate::{transcriber_qwen, AppState, CancelRegistryGuard};
 
@@ -32,7 +32,7 @@ pub(crate) fn get_engine_statuses(app: AppHandle) -> HashMap<String, EngineStatu
 }
 
 fn engine_status(app: &AppHandle, engine: &str) -> EngineStatus {
-    let unavailable_reason = engine_unavailable_reason(app, engine);
+    let unavailable_reason = engine_unavailable_reason(engine);
     EngineStatus {
         available: unavailable_reason.is_none(),
         model_ready: unavailable_reason.is_none() && is_model_ready_for_engine(app, engine),
@@ -40,7 +40,7 @@ fn engine_status(app: &AppHandle, engine: &str) -> EngineStatus {
     }
 }
 
-fn engine_unavailable_reason(_app: &AppHandle, engine: &str) -> Option<String> {
+fn engine_unavailable_reason(engine: &str) -> Option<String> {
     if transcriber_qwen::is_qwen_engine(engine) {
         return transcriber_qwen::unavailable_reason();
     }
@@ -56,15 +56,6 @@ pub(crate) fn is_model_ready_for_engine(app: &AppHandle, engine: &str) -> bool {
         }
         _ => false,
     }
-}
-
-#[tauri::command]
-pub(crate) async fn download_model(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let engine = settings::load(&app).engine;
-    download_model_for_engine(app, state, engine).await
 }
 
 #[tauri::command]
@@ -135,33 +126,22 @@ async fn download_model_inner(
 
             let expected_bytes = transcriber_qwen::expected_bytes_for_engine(engine)
                 .ok_or_else(|| format!("Неизвестная Qwen-модель: {engine}"))?;
-            let _ = app.emit("model:progress", 1u32);
-            let _ = app.emit("model:stage", "downloading");
             let engine_str = engine.to_string();
             let app_for_task = app.clone();
             let cache_dir =
                 transcriber_qwen::model_cache_dir(&app, engine).map_err(|e| e.to_string())?;
 
-            let poll_handle = spawn_model_progress_poller(
+            super::run_model_warmup(
                 app.clone(),
                 cache_dir,
                 expected_bytes,
                 "model:progress",
                 "model:stage",
-            );
-
-            let result = tauri::async_runtime::spawn_blocking(move || {
-                transcriber_qwen::warmup_model(&app_for_task, &engine_str, token)
-            })
-            .await;
-            poll_handle.abort();
-            result
-                .map_err(|e| e.to_string())?
-                .map_err(|e| e.to_string())?;
-            let _ = app.emit("model:stage", "ready");
-            let _ = app.emit("model:progress", 100u32);
+                move || transcriber_qwen::warmup_model(&app_for_task, &engine_str, token),
+            )
+            .await?;
         }
-        other => return Err(format!("Неизвестный движок транскрибации: {other}")),
+        other => return Err(unknown_engine_error(other)),
     }
     preload_active_engine(app);
     Ok(())
@@ -208,11 +188,11 @@ fn delete_model_files(app: &AppHandle, engine: &str) -> Result<(), String> {
             let model = transcriber_qwen::model_for_engine(engine)
                 .ok_or_else(|| format!("Неизвестная Qwen-модель: {engine}"))?;
             let cache_dir = paths::qwen_cache_dir(app).map_err(|e| e.to_string())?;
-            let repo_cache_name = format!("models--{}", model.replace('/', "--"));
+            let repo_cache_name = crate::mlx_env::repo_cache_name(model);
             remove_path_if_exists(&cache_dir.join("hub").join(repo_cache_name))
                 .map_err(|e| e.to_string())?;
         }
-        other => return Err(format!("Неизвестный движок транскрибации: {other}")),
+        other => return Err(unknown_engine_error(other)),
     }
     Ok(())
 }

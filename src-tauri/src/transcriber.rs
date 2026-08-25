@@ -47,7 +47,11 @@ pub fn transcribe_wav(
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(preferred_threads() as i32);
-    params.set_language(whisper_language(language));
+    params.set_language(Some(if language.is_empty() {
+        "auto"
+    } else {
+        language
+    }));
     params.set_no_context(true);
     params.set_no_timestamps(true);
     params.set_print_special(false);
@@ -68,11 +72,19 @@ pub fn transcribe_wav(
     Ok(out.trim().to_string())
 }
 
-fn whisper_language(language: &str) -> Option<&str> {
-    match language {
-        "auto" | "" => Some("auto"),
-        code => Some(code),
+pub(crate) fn write_silent_wav(path: &Path) -> Result<()> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec)?;
+    for _ in 0..16_000 {
+        writer.write_sample::<i16>(0)?;
     }
+    writer.finalize()?;
+    Ok(())
 }
 
 fn read_wav_samples(path: &Path) -> Result<Vec<f32>> {
@@ -99,21 +111,4 @@ fn preferred_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get().min(8))
         .unwrap_or(4)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn whisper_language_should_keep_explicit_code() {
-        assert_eq!(whisper_language("ru"), Some("ru"));
-        assert_eq!(whisper_language("en"), Some("en"));
-    }
-
-    #[test]
-    fn whisper_language_should_map_blank_to_auto() {
-        assert_eq!(whisper_language("auto"), Some("auto"));
-        assert_eq!(whisper_language(""), Some("auto"));
-    }
 }

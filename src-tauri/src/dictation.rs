@@ -31,9 +31,14 @@ pub struct DictationManager {
 struct Inner {
     phase: DictationPhase,
     command_tx: Option<mpsc::Sender<RecorderCommand>>,
-    worker_started: bool,
     registered_shortcut: Option<String>,
     last_error: Option<String>,
+}
+
+impl Inner {
+    fn worker_started(&self) -> bool {
+        self.command_tx.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -48,12 +53,7 @@ pub enum DictationPhase {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DictationStatus {
-    pub enabled: bool,
-    pub hold_key: String,
     pub phase: DictationPhase,
-    pub listener_started: bool,
-    pub registered_shortcut: Option<String>,
-    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -181,34 +181,24 @@ impl DictationManager {
             inner: Arc::new(Mutex::new(Inner {
                 phase: DictationPhase::Idle,
                 command_tx: None,
-                worker_started: false,
                 registered_shortcut: None,
                 last_error: None,
             })),
         }
     }
 
-    pub fn status(&self, app: &AppHandle) -> DictationStatus {
-        let settings = settings::load(app);
+    pub fn status(&self) -> DictationStatus {
         let inner = self.inner.lock();
-        DictationStatus {
-            enabled: settings.dictation_enabled,
-            hold_key: settings.dictation_hold_key,
-            phase: inner.phase,
-            listener_started: inner.worker_started,
-            registered_shortcut: inner.registered_shortcut.clone(),
-            last_error: inner.last_error.clone(),
-        }
+        DictationStatus { phase: inner.phase }
     }
 
     pub fn start_worker(&self, app: AppHandle) {
         let (tx, rx) = mpsc::channel();
         {
             let mut inner = self.inner.lock();
-            if inner.worker_started {
+            if inner.worker_started() {
                 return;
             }
-            inner.worker_started = true;
             inner.command_tx = Some(tx.clone());
         }
 
