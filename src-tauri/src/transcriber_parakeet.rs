@@ -180,21 +180,11 @@ fn resolve_mlx_python(explicit: Option<PathBuf>, roots: &[PathBuf]) -> Option<Pa
 }
 
 fn mlx_candidate_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join("Library/Application Support/com.alexk.parrot"));
-    }
-    if let Ok(current) = std::env::current_dir() {
-        roots.push(current.clone());
-        if let Some(parent) = current.parent() {
-            roots.push(parent.to_path_buf());
-        }
-    }
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    roots.push(manifest_dir.clone());
-    if let Some(parent) = manifest_dir.parent() {
-        roots.push(parent.to_path_buf());
-    }
+    let mut roots = dirs::home_dir()
+        .map(|home| home.join("Library/Application Support/com.alexk.parrot"))
+        .into_iter()
+        .collect::<Vec<_>>();
+    roots.extend(crate::mlx_env::candidate_roots());
     roots
 }
 
@@ -808,6 +798,20 @@ mod tests {
         let resolved = resolve_mlx_python(None, std::slice::from_ref(&root));
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(resolved, Some(python));
+    }
+
+    #[test]
+    fn mlx_candidate_roots_prioritize_app_support_then_shared_roots() {
+        let roots = mlx_candidate_roots();
+        let shared_roots = crate::mlx_env::candidate_roots();
+
+        assert!(roots.ends_with(&shared_roots));
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(
+                roots.first(),
+                Some(&home.join("Library/Application Support/com.alexk.parrot"))
+            );
+        }
     }
 
     #[test]

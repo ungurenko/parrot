@@ -3,7 +3,7 @@ import type { Theme } from "../types";
 
 export type ResolvedTheme = "light" | "dark";
 
-export const THEME_STORAGE_KEY = "parrot-theme";
+const THEME_STORAGE_KEY = "parrot-theme";
 
 const prefersDarkQuery = () => window.matchMedia("(prefers-color-scheme: dark)");
 
