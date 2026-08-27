@@ -221,6 +221,7 @@ function SettingsTabs({ active, onChange }: SettingsTabsProps) {
             type="button"
             role="tab"
             aria-selected={selected}
+            autoFocus={selected}
             className={cn("settings-nav-item", selected && "active")}
             onClick={() => onChange(tab.id)}
           >
@@ -1215,7 +1216,7 @@ export function SettingsModal({
       }}
     >
       <DialogContent className="glass-modal settings-modal-shell flex max-h-[90vh] min-h-0 w-[min(780px,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
-        <DialogHeader className="modal-band-top min-w-0 shrink-0 p-5 pr-12">
+        <DialogHeader className="modal-band-top min-w-0 shrink-0 p-6 pr-12">
           <DialogTitle>Настройки</DialogTitle>
           <DialogDescription>
             Базовые параметры, модели и дополнительные функции.

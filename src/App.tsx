@@ -439,8 +439,8 @@ function App() {
             <button
               type="button"
               className="pill engine-pill"
-              onClick={() => openSettings("basic")}
-              title="Открыть настройки распознавания"
+              onClick={() => openSettings("models")}
+              title="Открыть выбор режима распознавания"
             >
               <span className="truncate">{engineLabel}</span>
               <ChevronDownIcon
