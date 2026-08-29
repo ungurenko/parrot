@@ -1,27 +1,19 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SummaryRuntime {
-    MlxLm,
-    MlxVlm,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SummaryModelSpec {
     pub id: &'static str,
     pub label: &'static str,
     pub repo: &'static str,
     pub expected_bytes: u64,
-    pub runtime: SummaryRuntime,
+    pub disable_thinking: bool,
     pub ready_marker: &'static str,
 }
-
-pub const DEFAULT_SUMMARY_MODEL: &str = "qwen3-4b";
 
 pub const QWEN3_4B_SUMMARY: SummaryModelSpec = SummaryModelSpec {
     id: "qwen3-4b",
     label: "Qwen 3-4B Instruct",
     repo: "mlx-community/Qwen3-4B-Instruct-2507-4bit",
     expected_bytes: 2_262_920_192,
-    runtime: SummaryRuntime::MlxLm,
+    disable_thinking: false,
     ready_marker: ".parrot-ready-summary-qwen3-4b",
 };
 
@@ -30,9 +22,11 @@ pub const GEMMA4_E2B_SUMMARY: SummaryModelSpec = SummaryModelSpec {
     label: "Gemma 4 E2B-it",
     repo: "mlx-community/gemma-4-e2b-it-4bit",
     expected_bytes: 3_580_765_126,
-    runtime: SummaryRuntime::MlxVlm,
+    disable_thinking: true,
     ready_marker: ".parrot-ready-summary-gemma4-e2b",
 };
+
+pub const DEFAULT_SUMMARY_MODEL: &str = GEMMA4_E2B_SUMMARY.id;
 
 pub const SUPPORTED_SUMMARY_MODELS: [&SummaryModelSpec; 2] =
     [&QWEN3_4B_SUMMARY, &GEMMA4_E2B_SUMMARY];
@@ -44,10 +38,12 @@ pub fn summary_model_spec(id: &str) -> Option<&'static SummaryModelSpec> {
         .find(|model| model.id == id)
 }
 
+pub fn summary_model_spec_or_default(id: &str) -> &'static SummaryModelSpec {
+    summary_model_spec(id).unwrap_or(&GEMMA4_E2B_SUMMARY)
+}
+
 pub fn normalize_summary_model(id: &str) -> &'static str {
-    summary_model_spec(id)
-        .map(|model| model.id)
-        .unwrap_or(DEFAULT_SUMMARY_MODEL)
+    summary_model_spec_or_default(id).id
 }
 
 pub fn is_supported_summary_model(id: &str) -> bool {
@@ -63,7 +59,16 @@ mod tests {
         let spec = summary_model_spec("gemma4-e2b").expect("gemma spec");
         assert_eq!(spec.repo, "mlx-community/gemma-4-e2b-it-4bit");
         assert_eq!(spec.expected_bytes, 3_580_765_126);
-        assert_eq!(spec.runtime, SummaryRuntime::MlxVlm);
+        assert!(spec.disable_thinking);
+    }
+
+    #[test]
+    fn gemma_should_be_the_default_summary_model() {
+        assert_eq!(DEFAULT_SUMMARY_MODEL, GEMMA4_E2B_SUMMARY.id);
+        assert_eq!(
+            summary_model_spec_or_default("bad-model"),
+            &GEMMA4_E2B_SUMMARY
+        );
     }
 
     #[test]

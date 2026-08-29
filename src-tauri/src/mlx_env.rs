@@ -23,6 +23,16 @@ const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
 
+// Parrot uses one shared venv for Qwen ASR and local summaries. Keep the MLX
+// pin here so installing either feature cannot silently break the other one.
+pub(crate) const SHARED_MLX_PACKAGE: &str = "mlx==0.31.2";
+
+pub(crate) fn shared_mlx_version() -> &'static str {
+    SHARED_MLX_PACKAGE
+        .strip_prefix("mlx==")
+        .expect("shared MLX package must be pinned with ==")
+}
+
 // Shared warm-server HTTP plumbing (Qwen ASR and summary servers).
 pub(crate) const SERVER_HOST: &str = "127.0.0.1";
 pub(crate) const SERVER_START_TIMEOUT: Duration = Duration::from_secs(90);

@@ -21,17 +21,23 @@ const MODEL_QWEN_0_6B: &str = "Qwen/Qwen3-ASR-0.6B";
 const MODEL_QWEN_1_7B: &str = "Qwen/Qwen3-ASR-1.7B";
 const SERVER_API_KEY: &str = "parrot-local-qwen";
 const READY_MARKER_PREFIX: &str = ".parrot-ready";
-const RUNTIME_READY_MARKER: &str = ".parrot-ready-qwen-runtime-0.3.5-mlx-0.31.1";
-const QWEN_RUNTIME_PACKAGES: &[&str] = &["mlx==0.31.1", "mlx-qwen3-asr[serve]==0.3.5"];
-const QWEN_RUNTIME_CHECK: &str = r#"
+const QWEN_ASR_PACKAGE: &str = "mlx-qwen3-asr[serve]==0.3.5";
+const QWEN_RUNTIME_PACKAGES: &[&str] = &[mlx_env::SHARED_MLX_PACKAGE, QWEN_ASR_PACKAGE];
+const QWEN_RUNTIME_CHECK_TEMPLATE: &str = r#"
 from importlib.metadata import version
 import fastapi
 import uvicorn
 import mlx
 import mlx_qwen3_asr
-assert version("mlx") == "0.31.1"
-assert version("mlx-qwen3-asr") == "0.3.5"
+assert version("mlx") == "{mlx_version}"
+assert version("mlx-qwen3-asr") == "{qwen_version}"
 "#;
+
+fn qwen_asr_version() -> &'static str {
+    QWEN_ASR_PACKAGE
+        .strip_prefix("mlx-qwen3-asr[serve]==")
+        .expect("Qwen ASR package must be pinned with ==")
+}
 
 /// Expected cache size per model (safetensors + tokenizer + config).
 /// Used to detect incomplete downloads.
@@ -155,7 +161,11 @@ fn runtime_ready_marker_path(app: &AppHandle) -> Result<PathBuf> {
     let root = env_dir
         .parent()
         .ok_or_else(|| anyhow!("Некорректный путь окружения Qwen"))?;
-    Ok(root.join(RUNTIME_READY_MARKER))
+    Ok(root.join(format!(
+        ".parrot-ready-qwen-runtime-{}-mlx-{}",
+        qwen_asr_version(),
+        mlx_env::shared_mlx_version()
+    )))
 }
 
 fn runtime_ready_marker_exists(app: &AppHandle) -> bool {
@@ -183,14 +193,10 @@ fn qwen_runtime_ready_at(python: &Path, cli: &Path) -> bool {
     if !python.is_file() || !cli.is_file() {
         return false;
     }
-    let imports_ready = Command::new(python)
-        .args(["-c", QWEN_RUNTIME_CHECK])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
+    let runtime_check = QWEN_RUNTIME_CHECK_TEMPLATE
+        .replace("{mlx_version}", mlx_env::shared_mlx_version())
+        .replace("{qwen_version}", qwen_asr_version());
+    let imports_ready = mlx_env::python_import_ok(python, &runtime_check);
     imports_ready
         && Command::new(cli)
             .arg("--help")
@@ -771,7 +777,7 @@ mod tests {
     fn qwen_install_keeps_other_shared_venv_runtimes() {
         assert_eq!(
             QWEN_RUNTIME_PACKAGES,
-            &["mlx==0.31.1", "mlx-qwen3-asr[serve]==0.3.5"]
+            &["mlx==0.31.2", "mlx-qwen3-asr[serve]==0.3.5"]
         );
         assert!(!QWEN_RUNTIME_PACKAGES
             .iter()

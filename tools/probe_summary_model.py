@@ -3,18 +3,16 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 
 MODELS = {
     "qwen3-4b": {
         "repo": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
-        "runtime": "mlx_lm",
     },
     "gemma4-e2b": {
         "repo": "mlx-community/gemma-4-e2b-it-4bit",
-        "runtime": "mlx_vlm",
+        "disable_thinking": True,
     },
 }
 
@@ -39,26 +37,7 @@ def build_command(model_id: str, transcript: str) -> list[str]:
         f"Транскрипт:\n---\n{transcript}\n---"
     )
 
-    if spec["runtime"] == "mlx_vlm":
-        return [
-            str(python_bin()),
-            "-m",
-            "mlx_vlm",
-            "generate",
-            "--model",
-            spec["repo"],
-            "--system",
-            SYSTEM_PROMPT,
-            "--prompt",
-            prompt,
-            "--max-tokens",
-            "700",
-            "--temperature",
-            "0.3",
-            "--verbose",
-        ]
-
-    return [
+    command = [
         str(python_bin()),
         "-m",
         "mlx_lm",
@@ -78,6 +57,11 @@ def build_command(model_id: str, transcript: str) -> list[str]:
         "--verbose",
         "False",
     ]
+    if spec.get("disable_thinking"):
+        command.extend(
+            ["--chat-template-config", '{"enable_thinking":false}']
+        )
+    return command
 
 
 def run_model(model_id: str, transcript: str) -> dict:

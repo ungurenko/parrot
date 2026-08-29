@@ -128,11 +128,11 @@ export const SUMMARY_MODEL_SIZE: Record<SummaryModel, string> = {
 };
 
 export const SUMMARY_MODEL_BADGE: Record<SummaryModel, string> = {
-  "qwen3-4b": "стабильная",
-  "gemma4-e2b": "новая",
+  "qwen3-4b": "компактная",
+  "gemma4-e2b": "быстрая",
 };
 
-export const DEFAULT_SUMMARY_MODEL: SummaryModel = "qwen3-4b";
+export const DEFAULT_SUMMARY_MODEL: SummaryModel = "gemma4-e2b";
 
 export const CANCELLED_MARKER = "Отменено пользователем";
 

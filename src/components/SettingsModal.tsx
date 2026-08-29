@@ -583,8 +583,8 @@ function SummarySettingsSection({
                 </span>
                 <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
                   {model === "qwen3-4b"
-                    ? "Проверенная модель для стабильных конспектов."
-                    : "Свежая Gemma для сравнения качества русского текста."}
+                    ? "Занимает меньше места и остаётся запасным вариантом."
+                    : "Рекомендуется: быстрее создаёт подробные русские конспекты."}
                 </span>
               </button>
             ))}

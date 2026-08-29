@@ -97,7 +97,7 @@ ffmpeg: извлечение аудио → WAV 16 kHz mono        (yt-dlp + ffm
 
 - **Desktop:** Tauri 2.0 (Rust + WebView), macOS arm64, минимум macOS 11.
 - **Backend:** Rust — `whisper-rs` (Metal + CoreML), `parakeet-rs` (ONNX), `tokio`, `cpal` (запись микрофона), `arboard` (буфер обмена), libc (SIGTERM для отмены задач).
-- **MLX-подсистема:** Python venv в пользовательской папке — `mlx-lm` / `mlx-vlm` для конспекта и `mlx-qwen3-asr` для Qwen-режимов.
+- **MLX-подсистема:** Python venv в пользовательской папке — `mlx-lm` для конспекта и `mlx-qwen3-asr` для Qwen-режимов.
 - **Frontend:** React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui.
 - **Sidecar-бинарники:** бандл `ffmpeg` и `yt-dlp` внутри `.app`.
 - **Плагины Tauri:** updater, global-shortcut, single-instance, dialog, opener, process.
@@ -117,7 +117,7 @@ ffmpeg: извлечение аудио → WAV 16 kHz mono        (yt-dlp + ffm
 | `transcriber_parakeet.rs` | Parakeet V3: ONNX int8 (чанки 5 мин + 5 c overlap) + опциональный MLX-ускоритель |
 | `transcriber.rs` | Whisper large-v3-turbo (whisper-rs, Metal + CoreML) |
 | `transcriber_qwen.rs` | Qwen3-ASR MLX: warm server на localhost с fallback на CLI |
-| `summarizer_qwen3.rs` · `summarizer_models.rs` | Конспект через `mlx_lm`/`mlx_vlm`; спецификации моделей, warm OpenAI-совместимый сервер |
+| `summarizer_qwen3.rs` · `summarizer_models.rs` | Конспект через `mlx_lm`; спецификации моделей, warm OpenAI-совместимый сервер |
 | `dictation.rs` | Hold-to-talk: запись с cpal, глобальный хоткей, вставка текста через Accessibility API |
 | `history.rs` | История транскрипций (до 100 записей) |
 | `mlx_env.rs` | Автоустановка Python-окружения для конспекта (standalone Python + venv + пакеты) |

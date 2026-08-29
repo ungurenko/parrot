@@ -19,7 +19,7 @@ use std::os::fd::AsRawFd;
 use crate::cancellation::CancelToken;
 use crate::prompts;
 use crate::{mlx_env, paths, settings, summarizer_models};
-use summarizer_models::{SummaryModelSpec, SummaryRuntime};
+use summarizer_models::SummaryModelSpec;
 
 const SERVER_LOCK_FILE: &str = "summary-server.lock";
 const SERVER_REGISTRY_FILE: &str = "summary-server.json";
@@ -32,9 +32,11 @@ const LEGACY_QWEN_READY_MARKER: &str = ".parrot-ready-summary";
 const SUMMARY_MAX_TOKENS: u32 = 4096;
 const SUMMARY_TEMP: f32 = 0.3;
 const SUMMARY_TOP_P: f32 = 0.9;
-const SUMMARY_MLX_PACKAGES: [&str; 3] = ["mlx==0.31.1", "mlx-lm==0.31.2", "mlx-vlm==0.4.3"];
+const SUMMARY_RUNTIME: &str = "mlx_lm";
+const SUMMARY_MLX_PACKAGES: [&str; 2] = [mlx_env::SHARED_MLX_PACKAGE, "mlx-lm==0.31.3"];
 
 static SUMMARY_SERVER: Lazy<Mutex<Option<SummaryServer>>> = Lazy::new(|| Mutex::new(None));
+static RESOLVED_SUMMARY_PYTHON: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 static SERVER_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = Lazy::new(|| {
     reqwest::blocking::Client::builder()
         .timeout(mlx_env::SERVER_REQUEST_TIMEOUT)
@@ -111,7 +113,7 @@ impl SummaryServer {
     fn matches_spec(&self, spec: &SummaryModelSpec) -> bool {
         self.record.model_id == spec.id
             && self.record.model == spec.repo
-            && self.record.runtime == runtime_name(spec.runtime)
+            && self.record.runtime == SUMMARY_RUNTIME
     }
 
     fn is_owned(&self) -> bool {
@@ -184,8 +186,7 @@ pub fn selected_model_label(app: &AppHandle) -> &'static str {
 
 fn selected_model(app: &AppHandle) -> &'static SummaryModelSpec {
     let settings = settings::load(app);
-    summarizer_models::summary_model_spec(&settings.summary_model)
-        .unwrap_or(&summarizer_models::QWEN3_4B_SUMMARY)
+    summarizer_models::summary_model_spec_or_default(&settings.summary_model)
 }
 
 pub fn model_cache_exists(app: &AppHandle) -> bool {
@@ -404,7 +405,7 @@ fn ensure_summary_server(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<(S
         port,
         model_id: spec.id.to_string(),
         model: spec.repo.to_string(),
-        runtime: runtime_name(spec.runtime).to_string(),
+        runtime: SUMMARY_RUNTIME.to_string(),
         python: python.to_string_lossy().to_string(),
         process_start_time: server_start_time,
         owner_pid: std::process::id(),
@@ -421,7 +422,7 @@ fn ensure_summary_server(app: &AppHandle, cancel: Arc<CancelToken>) -> Result<(S
     tracing::info!(
         "summary warm server started (pid={pid}, port={port}, model={}, runtime={}, reused=false) in {:.2}s",
         spec.id,
-        runtime_name(spec.runtime),
+        SUMMARY_RUNTIME,
         server_start.elapsed().as_secs_f64()
     );
 
@@ -680,7 +681,7 @@ fn run_summary_generate(
     let pid = child.id();
     cancel.register_pid(pid);
 
-    if let (SummaryRuntime::MlxLm, Some(prompt)) = (spec.runtime, request.prompt_stdin) {
+    if let Some(prompt) = request.prompt_stdin {
         let mut stdin = child
             .stdin
             .take()
@@ -714,18 +715,6 @@ fn build_summary_generate_command(
     spec: &SummaryModelSpec,
     request: &MlxLmGenerateRequest<'_>,
 ) -> Command {
-    match spec.runtime {
-        SummaryRuntime::MlxLm => build_mlx_lm_generate_command(python, cache_dir, spec, request),
-        SummaryRuntime::MlxVlm => build_mlx_vlm_generate_command(python, cache_dir, spec, request),
-    }
-}
-
-fn build_mlx_lm_generate_command(
-    python: &Path,
-    cache_dir: &Path,
-    spec: &SummaryModelSpec,
-    request: &MlxLmGenerateRequest<'_>,
-) -> Command {
     let mut command = mlx_lm_command(python, cache_dir);
     command.arg("generate").arg("--model").arg(spec.repo);
     if let Some(system_prompt) = request.system_prompt {
@@ -748,50 +737,15 @@ fn build_mlx_lm_generate_command(
     if let Some(top_p) = request.top_p {
         command.arg("--top-p").arg(top_p.to_string());
     }
-    command
-}
-
-fn build_mlx_vlm_generate_command(
-    python: &Path,
-    cache_dir: &Path,
-    spec: &SummaryModelSpec,
-    request: &MlxLmGenerateRequest<'_>,
-) -> Command {
-    let mut command = mlx_vlm_generate_command(python, cache_dir);
-    command.arg("--model").arg(spec.repo);
-    if let Some(system_prompt) = request.system_prompt {
-        command.arg("--system").arg(system_prompt);
-    }
-    if let Some(prompt_arg) = request.prompt_arg {
-        command.arg("--prompt").arg(prompt_arg);
-    } else if let Some(prompt_stdin) = request.prompt_stdin {
-        command.arg("--prompt").arg(prompt_stdin);
-    }
-    command
-        .arg("--max-tokens")
-        .arg(request.max_tokens.to_string())
-        .arg("--temperature")
-        .arg(request.temp.unwrap_or(SUMMARY_TEMP).to_string())
-        .arg("--verbose");
-    if let Some(top_p) = request.top_p {
-        command.arg("--top-p").arg(top_p.to_string());
+    if spec.disable_thinking {
+        command
+            .arg("--chat-template-config")
+            .arg(r#"{"enable_thinking":false}"#);
     }
     command
 }
 
 fn build_summary_server_command(
-    python: &Path,
-    cache_dir: &Path,
-    spec: &SummaryModelSpec,
-    port: u16,
-) -> Command {
-    match spec.runtime {
-        SummaryRuntime::MlxLm => build_mlx_lm_server_command(python, cache_dir, spec, port),
-        SummaryRuntime::MlxVlm => build_mlx_vlm_server_command(python, cache_dir, spec, port),
-    }
-}
-
-fn build_mlx_lm_server_command(
     python: &Path,
     cache_dir: &Path,
     spec: &SummaryModelSpec,
@@ -809,48 +763,19 @@ fn build_mlx_lm_server_command(
         .arg("--allowed-origins")
         .arg("tauri://localhost,http://tauri.localhost")
         .arg("--log-level")
-        .arg("ERROR")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    command
-}
-
-fn build_mlx_vlm_server_command(
-    python: &Path,
-    cache_dir: &Path,
-    spec: &SummaryModelSpec,
-    port: u16,
-) -> Command {
-    let mut command = mlx_vlm_server_command(python, cache_dir);
-    command
-        .arg("--model")
-        .arg(spec.repo)
-        .arg("--host")
-        .arg(mlx_env::SERVER_HOST)
-        .arg("--port")
-        .arg(port.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .arg("ERROR");
+    if spec.disable_thinking {
+        command
+            .arg("--chat-template-args")
+            .arg(r#"{"enable_thinking":false}"#);
+    }
+    command.stdout(Stdio::null()).stderr(Stdio::null());
     command
 }
 
 fn mlx_lm_command(python: &Path, cache_dir: &Path) -> Command {
     let mut cmd = mlx_env::python_command(python, cache_dir);
     cmd.arg("-m").arg("mlx_lm");
-    cmd
-}
-
-fn mlx_vlm_generate_command(python: &Path, cache_dir: &Path) -> Command {
-    mlx_vlm_command(python, cache_dir, "generate")
-}
-
-fn mlx_vlm_server_command(python: &Path, cache_dir: &Path) -> Command {
-    mlx_vlm_command(python, cache_dir, "server")
-}
-
-fn mlx_vlm_command(python: &Path, cache_dir: &Path, subcommand: &str) -> Command {
-    let mut cmd = mlx_env::python_command(python, cache_dir);
-    cmd.arg("-m").arg("mlx_vlm").arg(subcommand);
     cmd
 }
 
@@ -880,13 +805,6 @@ fn server_client() -> Result<&'static reqwest::blocking::Client> {
 fn find_free_port() -> Result<u16> {
     let listener = std::net::TcpListener::bind((mlx_env::SERVER_HOST, 0))?;
     Ok(listener.local_addr()?.port())
-}
-
-fn runtime_name(runtime: SummaryRuntime) -> &'static str {
-    match runtime {
-        SummaryRuntime::MlxLm => "mlx_lm",
-        SummaryRuntime::MlxVlm => "mlx_vlm",
-    }
 }
 
 fn server_registry_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf)> {
@@ -1038,7 +956,7 @@ fn wait_for_shared_server(
         if let Ok(Some(record)) = read_registry(registry_path) {
             if record.model_id == spec.id
                 && record.model == spec.repo
-                && record.runtime == runtime_name(spec.runtime)
+                && record.runtime == SUMMARY_RUNTIME
                 && validate_registry_record(&record).is_some()
                 && mlx_env::health_ok(record.port)
             {
@@ -1191,14 +1109,13 @@ fn cleanup_stale_servers_inner(app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
-fn summary_python_candidates(app: &AppHandle) -> Vec<String> {
+fn summary_python_candidates(app: &AppHandle) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let mut add = |path: PathBuf| {
         let candidates = [path.clone(), path.canonicalize().unwrap_or(path)];
         for candidate in candidates {
-            let value = candidate.to_string_lossy().to_string();
-            if !paths.contains(&value) {
-                paths.push(value);
+            if !paths.contains(&candidate) {
+                paths.push(candidate);
             }
         }
     };
@@ -1224,17 +1141,19 @@ fn summary_python_candidates(app: &AppHandle) -> Vec<String> {
 
 fn legacy_summary_metadata(
     command: &str,
-    python_paths: &[String],
+    python_paths: &[PathBuf],
 ) -> Option<(String, String, String, u16)> {
+    let port = command_arg(command, "--port").and_then(|value| value.parse().ok())?;
     for python in python_paths {
+        let python = python.to_string_lossy();
         for spec in summarizer_models::SUPPORTED_SUMMARY_MODELS {
-            let runtime = runtime_name(spec.runtime).to_string();
-            let Some(port) = command_arg(command, "--port").and_then(|value| value.parse().ok())
-            else {
-                continue;
-            };
-            if summary_command_matches(command, spec.repo, &runtime, python, port) {
-                return Some((spec.repo.to_string(), runtime, python.clone(), port));
+            if summary_command_matches(command, spec.repo, SUMMARY_RUNTIME, &python, port) {
+                return Some((
+                    spec.repo.to_string(),
+                    SUMMARY_RUNTIME.to_string(),
+                    python.into_owned(),
+                    port,
+                ));
             }
         }
     }
@@ -1392,7 +1311,7 @@ where
         return false;
     }
 
-    let term_result = signal_process(snapshot.pid, libc::SIGTERM);
+    let term_result = mlx_env::signal_process(snapshot.pid, libc::SIGTERM);
     let deadline = Instant::now() + SERVER_STOP_TIMEOUT;
     while Instant::now() < deadline {
         if process_start_time(snapshot.pid) != Some(snapshot.start_time) {
@@ -1403,7 +1322,7 @@ where
     }
 
     if process_start_time(snapshot.pid) == Some(snapshot.start_time) {
-        let kill_result = signal_process(snapshot.pid, libc::SIGKILL);
+        let kill_result = mlx_env::signal_process(snapshot.pid, libc::SIGKILL);
         tracing::warn!(
             "summary orphan PID {} did not stop after SIGTERM; SIGKILL result={kill_result:?}",
             snapshot.pid
@@ -1412,65 +1331,25 @@ where
     term_result.is_ok() || process_start_time(snapshot.pid) != Some(snapshot.start_time)
 }
 
-fn signal_process(pid: u32, signal: libc::c_int) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        let result = unsafe { libc::kill(pid as libc::pid_t, signal) };
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = (pid, signal);
-        Err(io::Error::new(
-            ErrorKind::Unsupported,
-            "process signals are unavailable on this platform",
-        ))
-    }
-}
-
 fn resolve_python(app: &AppHandle) -> Result<PathBuf> {
-    if let Some(path) = env::var_os("PARROT_QWEN_PYTHON") {
-        let p = PathBuf::from(path);
-        if p.exists() {
-            return Ok(p);
-        }
-    }
-    if let Some(path) =
-        env::var_os("PARROT_QWEN_BIN").or_else(|| env::var_os("AUDIO_TO_TEXT_QWEN_BIN"))
-    {
-        let p = PathBuf::from(path);
-        if let Some(parent) = p.parent() {
-            let py = parent.join("python");
-            if py.exists() {
-                return Ok(py);
-            }
-        }
-    }
-
-    // User-space venv created by `setup_summarizer_env` Tauri command —
-    // works for users who installed Parrot from the .dmg and have no repo.
-    if let Ok(env_dir) = paths::qwen_env_dir(app) {
-        let py = env_dir.join("bin/python");
-        if py.exists() {
-            return Ok(py);
-        }
-    }
-
-    // Repo-local venv created by `tools/setup_qwen_mlx.sh` — the dev path.
-    for root in mlx_env::candidate_roots() {
-        let path = root.join(".qwen-mlx/venv/bin/python");
+    if let Some(path) = RESOLVED_SUMMARY_PYTHON.lock().as_ref() {
         if path.exists() {
-            return Ok(path);
+            return Ok(path.clone());
         }
+    }
+
+    if let Some(path) = summary_python_candidates(app)
+        .into_iter()
+        .find(|candidate| {
+            candidate.exists() && mlx_env::python_import_ok(candidate, "import mlx_lm")
+        })
+    {
+        *RESOLVED_SUMMARY_PYTHON.lock() = Some(path.clone());
+        return Ok(path);
     }
 
     Err(anyhow!(
-        "Python venv для конспекта не установлен. Нажмите «Установить окружение» в настройках."
+        "Python venv для конспекта не готов: mlx_lm не установлен. Нажмите «Установить окружение» в настройках."
     ))
 }
 
@@ -1488,43 +1367,41 @@ fn install_env_locked<F: Fn(&str) + Send + Sync>(app: &AppHandle, on_progress: &
     on_progress("Обновляю pip…");
     let _ = mlx_env::pip_install(&venv_python, &["--upgrade", "pip"], "pip upgrade");
 
-    // Step 3 — install MLX runtimes for Qwen and Gemma summaries.
+    // Step 3 — install the shared MLX runtime for Qwen and Gemma summaries.
     on_progress("Устанавливаю MLX для Qwen и Gemma…");
     let mut pip_args = vec!["--disable-pip-version-check"];
     pip_args.extend_from_slice(&SUMMARY_MLX_PACKAGES);
     let out = mlx_env::pip_install(
         &venv_python,
         &pip_args,
-        "Не удалось запустить pip install mlx-lm/mlx-vlm",
+        "Не удалось запустить pip install mlx-lm",
     )?;
     if !out.status.success() {
         return Err(mlx_env::command_error(
-            "pip install mlx-lm/mlx-vlm завершился с ошибкой",
+            "pip install mlx-lm завершился с ошибкой",
             &out.stderr,
             out.status.code(),
         ));
     }
 
-    // Step 4 — sanity check: import both runtimes.
+    // Step 4 — sanity check the runtime.
     on_progress("Проверяю установку…");
     let out = Command::new(&venv_python)
-        .args([
-            "-c",
-            "import mlx_lm, mlx_vlm; print('mlx_lm ok'); print('mlx_vlm ok')",
-        ])
+        .args(["-c", "import mlx_lm; print('mlx_lm ok')"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .context("Не удалось проверить mlx_lm/mlx_vlm")?;
+        .context("Не удалось проверить mlx_lm")?;
     if !out.status.success() {
         return Err(mlx_env::command_error(
-            "mlx_lm или mlx_vlm не импортируется после установки",
+            "mlx_lm не импортируется после установки",
             &out.stderr,
             out.status.code(),
         ));
     }
 
+    *RESOLVED_SUMMARY_PYTHON.lock() = Some(venv_python);
     on_progress("Готово");
     Ok(())
 }
@@ -1555,8 +1432,11 @@ mod tests {
 
     #[test]
     fn summary_environment_installs_only_summary_runtimes() {
-        assert!(SUMMARY_MLX_PACKAGES.contains(&"mlx-lm==0.31.2"));
-        assert!(SUMMARY_MLX_PACKAGES.contains(&"mlx-vlm==0.4.3"));
+        assert!(SUMMARY_MLX_PACKAGES.contains(&"mlx==0.31.2"));
+        assert!(SUMMARY_MLX_PACKAGES.contains(&"mlx-lm==0.31.3"));
+        assert!(!SUMMARY_MLX_PACKAGES
+            .iter()
+            .any(|package| package.starts_with("mlx-vlm")));
         assert!(!SUMMARY_MLX_PACKAGES
             .iter()
             .any(|package| package.starts_with("parakeet-mlx")));
@@ -1568,6 +1448,35 @@ mod tests {
             name,
             std::process::id()
         ))
+    }
+
+    fn command_args(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn assert_summary_server_command(spec: &SummaryModelSpec, port: u16) -> Vec<String> {
+        let command = build_summary_server_command(
+            Path::new("/tmp/python"),
+            Path::new("/tmp/cache"),
+            spec,
+            port,
+        );
+        let args = command_args(&command);
+        let port = port.to_string();
+
+        assert!(args.windows(2).any(|pair| pair == ["-m", "mlx_lm"]));
+        assert!(args.iter().any(|arg| arg == "server"));
+        assert!(args.windows(2).any(|pair| pair == ["--model", spec.repo]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--host", mlx_env::SERVER_HOST]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--port", port.as_str()]));
+        args
     }
 
     #[test]
@@ -1639,50 +1548,39 @@ mod tests {
 
     #[test]
     fn qwen_summary_server_command_uses_mlx_lm() {
-        let command = build_mlx_lm_server_command(
-            Path::new("/tmp/python"),
-            Path::new("/tmp/cache"),
-            &crate::summarizer_models::QWEN3_4B_SUMMARY,
-            18181,
-        );
-        let args = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-
-        assert!(args.windows(2).any(|pair| pair == ["-m", "mlx_lm"]));
-        assert!(args.iter().any(|arg| arg == "server"));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--model", crate::summarizer_models::QWEN3_4B_SUMMARY.repo]));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--host", mlx_env::SERVER_HOST]));
-        assert!(args.windows(2).any(|pair| pair == ["--port", "18181"]));
+        let args =
+            assert_summary_server_command(&crate::summarizer_models::QWEN3_4B_SUMMARY, 18181);
+        assert!(!args.iter().any(|arg| arg == "--chat-template-args"));
     }
 
     #[test]
-    fn gemma_summary_server_command_uses_mlx_vlm() {
-        let command = build_mlx_vlm_server_command(
+    fn gemma_summary_server_command_uses_mlx_lm_without_thinking() {
+        let args =
+            assert_summary_server_command(&crate::summarizer_models::GEMMA4_E2B_SUMMARY, 18182);
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--chat-template-args", r#"{"enable_thinking":false}"#]));
+    }
+
+    #[test]
+    fn gemma_fallback_command_uses_mlx_lm_without_thinking() {
+        let request = MlxLmGenerateRequest {
+            prompt_arg: Some("Тест"),
+            max_tokens: 32,
+            ..MlxLmGenerateRequest::default()
+        };
+        let command = build_summary_generate_command(
             Path::new("/tmp/python"),
             Path::new("/tmp/cache"),
             &crate::summarizer_models::GEMMA4_E2B_SUMMARY,
-            18182,
+            &request,
         );
-        let args = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
+        let args = command_args(&command);
 
-        assert!(args.windows(2).any(|pair| pair == ["-m", "mlx_vlm"]));
-        assert!(args.iter().any(|arg| arg == "server"));
+        assert!(args.windows(2).any(|pair| pair == ["-m", "mlx_lm"]));
         assert!(args
             .windows(2)
-            .any(|pair| pair == ["--model", crate::summarizer_models::GEMMA4_E2B_SUMMARY.repo]));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--host", mlx_env::SERVER_HOST]));
-        assert!(args.windows(2).any(|pair| pair == ["--port", "18182"]));
+            .any(|pair| pair == ["--chat-template-config", r#"{"enable_thinking":false}"#]));
     }
 
     #[test]
@@ -1789,6 +1687,7 @@ mod tests {
     fn cleanup_filter_ignores_qwen_asr_and_foreign_python_processes() {
         let python =
             "/Users/alex/Library/Application Support/com.alexk.parrot/.qwen-mlx/venv/bin/python";
+        let python_paths = [PathBuf::from(python)];
         let summary_command = format!(
             "{python} -m mlx_lm server --model {} --host 127.0.0.1 --port 49192",
             crate::summarizer_models::QWEN3_4B_SUMMARY.repo
@@ -1804,12 +1703,12 @@ mod tests {
         assert!(summary_command_matches(
             &summary_command,
             crate::summarizer_models::QWEN3_4B_SUMMARY.repo,
-            "mlx_lm",
+            SUMMARY_RUNTIME,
             python,
             49192
         ));
-        assert!(legacy_summary_metadata(&summary_command, &[python.to_string()]).is_some());
-        assert!(legacy_summary_metadata(&asr_command, &[python.to_string()]).is_none());
-        assert!(legacy_summary_metadata(&foreign_command, &[python.to_string()]).is_none());
+        assert!(legacy_summary_metadata(&summary_command, &python_paths).is_some());
+        assert!(legacy_summary_metadata(&asr_command, &python_paths).is_none());
+        assert!(legacy_summary_metadata(&foreign_command, &python_paths).is_none());
     }
 }
