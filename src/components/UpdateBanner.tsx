@@ -1,15 +1,18 @@
 import { useState } from "react";
-import {
-  ArrowUpIcon,
-  BellIcon,
-  ChevronDownIcon,
-} from "lucide-react";
+import { ArrowUpIcon, BellIcon, XIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
 import type { AutoUpdate } from "../hooks/useAutoUpdate";
 import { parseReleaseNotes } from "@/lib/releaseNotes";
-import { cn } from "@/lib/utils";
 
 interface Props {
   updater: AutoUpdate;
@@ -18,14 +21,47 @@ interface Props {
 }
 
 interface UpdateBannerViewProps extends Props {
-  expanded: boolean;
-  onToggleExpanded: () => void;
+  notesOpen: boolean;
+  onNotesOpenChange: (open: boolean) => void;
+}
+
+interface UpdateNotesContentProps {
+  highlights: string[];
+  onInstall: () => void;
+}
+
+export function UpdateNotesContent({
+  highlights,
+  onInstall,
+}: UpdateNotesContentProps) {
+  return (
+    <>
+      <ul className="update-notes-list">
+        {highlights.map((highlight, index) => (
+          <li className="update-notes-item" key={`${index}-${highlight}`}>
+            <span className="update-notes-dot" aria-hidden="true" />
+            <span>{highlight}</span>
+          </li>
+        ))}
+      </ul>
+      <Separator />
+      <div className="update-notes-footer">
+        <span className="update-notes-meta">
+          Меньше минуты · Parrot перезапустится сам
+        </span>
+        <Button type="button" size="sm" onClick={onInstall}>
+          <ArrowUpIcon data-icon="inline-start" />
+          Обновить
+        </Button>
+      </div>
+    </>
+  );
 }
 
 export function UpdateBannerView({
   updater,
-  expanded,
-  onToggleExpanded,
+  notesOpen,
+  onNotesOpenChange,
   onDismiss,
   onOpenSettings,
 }: UpdateBannerViewProps) {
@@ -35,113 +71,128 @@ export function UpdateBannerView({
   const installing = status === "installing";
   const installError = status === "error" && errorScope === "install";
   const notes = parseReleaseNotes(available.body);
-  const hasNotes = notes.details.length > 0;
+  const hasNotes = notes.highlights.length > 0;
+  const dialogOpen = notesOpen && hasNotes && !installing && !installError;
+  const title = installing
+    ? "Обновляю Parrot"
+    : installError
+      ? "Обновление не установлено"
+      : "Доступна новая версия";
+
+  const install = () => {
+    onNotesOpenChange(false);
+    void updater.install();
+  };
 
   return (
-    <div
-      className={cn("update-banner", expanded && "expanded")}
-      role="region"
-      aria-label="Обновление Parrot"
-    >
-      <div className="update-banner-icon" aria-hidden="true">
-        <BellIcon size={15} />
-      </div>
-      <div className="update-banner-body">
-        <div className="update-banner-title-row">
-          <span className="update-banner-title">Доступно обновление Parrot</span>
-          <Badge variant="secondary">v{available.version}</Badge>
-          {!installing && !installError && hasNotes && (
-            <button
-              type="button"
-              className="update-banner-notes-toggle"
-              onClick={onToggleExpanded}
-              aria-expanded={expanded}
-              aria-controls="update-banner-notes"
-            >
-              Что нового
-              <ChevronDownIcon className="update-banner-chevron" size={12} />
-            </button>
+    <>
+      <div
+        className="update-banner mx-4 h-16 px-3 py-2"
+        role="region"
+        aria-label="Обновление Parrot"
+      >
+        <div className="update-banner-icon" aria-hidden="true">
+          <BellIcon size={15} />
+        </div>
+        <div className="update-banner-body">
+          <div className="update-banner-title-row">
+            <span className="update-banner-title">{title}</span>
+            <Badge variant="secondary">v{available.version}</Badge>
+          </div>
+          {installing ? (
+            <Progress
+              value={Math.max(progress, 2)}
+              className="update-banner-progress"
+            />
+          ) : (
+            <p className="update-banner-summary">
+              {installError
+                ? "Попробуйте ещё раз или откройте подробности."
+                : notes.summary || "Обновление готово к установке."}
+            </p>
           )}
         </div>
-        {installing ? (
-          <Progress
-            value={Math.max(progress, 2)}
-            className="update-banner-progress"
-          />
-        ) : installError ? (
-          <p className="update-banner-summary">
-            Не удалось установить обновление. {" "}
-            <button
+        <div className="update-banner-actions">
+          {installError && (
+            <Button
               type="button"
-              className="update-banner-subtitle underline underline-offset-2"
+              variant="ghost"
+              size="sm"
               onClick={onOpenSettings}
             >
-              Подробнее — в Настройках
-            </button>
-          </p>
-        ) : hasNotes ? (
-          <div
-            id="update-banner-notes"
-            className="update-banner-disclosure"
-            data-open={expanded}
-            aria-hidden={!expanded}
+              Подробнее
+            </Button>
+          )}
+          {!installing && !installError && hasNotes && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onNotesOpenChange(true)}
+              aria-haspopup="dialog"
+              aria-expanded={notesOpen}
+              aria-controls="update-notes-dialog"
+            >
+              Что нового
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            onClick={install}
+            disabled={installing}
           >
-            <div className="update-banner-disclosure-inner">
-              <div className="update-banner-meta">
-                Меньше минуты · Перезапустится автоматически
-              </div>
-              <div className="update-banner-notes">
-                {notes.details.map((paragraph, idx) => (
-                  <p key={idx}>{paragraph}</p>
-                ))}
-              </div>
+            <ArrowUpIcon data-icon="inline-start" />
+            {installing
+              ? progress > 0
+                ? `Обновляю… ${progress}%`
+                : "Готовлю…"
+              : installError
+                ? "Повторить"
+                : "Обновить"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={onDismiss}
+            aria-label="Скрыть подсказку"
+            title="Скрыть до следующего запуска"
+            disabled={installing}
+          >
+            <XIcon />
+          </Button>
+        </div>
+      </div>
+
+      <Dialog open={dialogOpen} onOpenChange={onNotesOpenChange}>
+        <DialogContent id="update-notes-dialog" className="sm:max-w-md">
+          <DialogHeader>
+            <div className="update-notes-title-row">
+              <DialogTitle>Что нового в Parrot</DialogTitle>
+              <Badge variant="secondary">v{available.version}</Badge>
             </div>
-          </div>
-        ) : null}
-      </div>
-      <div className="update-banner-actions">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={updater.install}
-          disabled={installing}
-        >
-          <ArrowUpIcon size={14} />
-          {installing
-            ? progress > 0
-              ? `Обновляю… ${progress}%`
-              : "Готовлю…"
-            : installError
-              ? "Повторить"
-              : "Обновить"}
-        </Button>
-        <button
-          type="button"
-          className="update-banner-close"
-          onClick={onDismiss}
-          aria-label="Скрыть подсказку"
-          title="Скрыть до следующего запуска"
-          disabled={installing}
-        >
-          ×
-        </button>
-      </div>
-    </div>
+            <DialogDescription>Главное в новой версии.</DialogDescription>
+          </DialogHeader>
+          <UpdateNotesContent
+            highlights={notes.highlights}
+            onInstall={install}
+          />
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
 export function UpdateBanner(props: Props) {
   const version = props.updater.available?.version ?? null;
-  const [expandedFor, setExpandedFor] = useState<string | null>(null);
+  const [notesOpenFor, setNotesOpenFor] = useState<string | null>(null);
 
   return (
     <UpdateBannerView
       {...props}
-      expanded={version !== null && expandedFor === version}
-      onToggleExpanded={() =>
-        setExpandedFor((current) => (current === version ? null : version))
-      }
+      notesOpen={version !== null && notesOpenFor === version}
+      onNotesOpenChange={(open) => setNotesOpenFor(open ? version : null)}
     />
   );
 }

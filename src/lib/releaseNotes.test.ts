@@ -18,8 +18,8 @@ describe("parseReleaseNotes", () => {
     const parsed = parseReleaseNotes(REAL_BODY);
 
     expect(parsed.summary).toBe("Транскрибация стала заметно быстрее.");
-    expect(parsed.details).toEqual([
-      "Транскрибация стала заметно быстрее. Модель распознавания теперь постоянно живёт в памяти.",
+    expect(parsed.highlights).toEqual([
+      "Транскрибация стала заметно быстрее.",
       "Parrot сам подстраивается под конкретный Mac.",
     ]);
   });
@@ -28,19 +28,26 @@ describe("parseReleaseNotes", () => {
     const parsed = parseReleaseNotes("Первая строка.\n\nВторой абзац.");
 
     expect(parsed.summary).toBe("Первая строка.");
-    expect(parsed.details).toEqual(["Первая строка.", "Второй абзац."]);
+    expect(parsed.highlights).toEqual(["Первая строка.", "Второй абзац."]);
   });
 
-  it("truncates an overlong first sentence with an ellipsis", () => {
+  it("keeps at most three concise highlights", () => {
     const long = `${"Слово ".repeat(60).trim()}.`;
-    const parsed = parseReleaseNotes(long);
+    const parsed = parseReleaseNotes(
+      [long, "Второй пункт. Продолжение.", "Третий пункт.", "Четвёртый пункт."].join(
+        "\n\n",
+      ),
+    );
 
     expect(parsed.summary.endsWith("…")).toBe(true);
     expect(parsed.summary.length).toBeLessThanOrEqual(141);
+    expect(parsed.highlights).toHaveLength(3);
+    expect(parsed.highlights[1]).toBe("Второй пункт.");
+    expect(parsed.highlights).not.toContain("Четвёртый пункт.");
   });
 
   it("returns an empty result for missing or blank body", () => {
-    expect(parseReleaseNotes(undefined)).toEqual({ summary: "", details: [] });
-    expect(parseReleaseNotes(null)).toEqual({ summary: "", details: [] });
+    expect(parseReleaseNotes(undefined)).toEqual({ summary: "", highlights: [] });
+    expect(parseReleaseNotes(null)).toEqual({ summary: "", highlights: [] });
   });
 });

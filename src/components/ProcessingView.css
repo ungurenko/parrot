@@ -1,3 +1,5 @@
+@layer properties, theme, base, components, utilities;
+
 @layer components {
   /* Processing workspace: one calm surface with a single branded motion cue */
   @property --processing-progress {

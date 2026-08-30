@@ -1,14 +1,15 @@
 export interface ParsedReleaseNotes {
   /** One-sentence teaser shown right in the update banner. */
   summary: string;
-  /** Full "what's new" paragraphs revealed behind the toggle. */
-  details: string[];
+  /** Up to three concise highlights shown in the details dialog. */
+  highlights: string[];
 }
 
 // Sections with installation instructions are noise inside the banner.
 const INSTALL_SECTION = /как получить|как установить|установит/i;
 const SENTENCE_BOUNDARY = /(?<=[.!?…])\s/;
 const SUMMARY_MAX_LEN = 140;
+const HIGHLIGHT_LIMIT = 3;
 
 function truncate(text: string): string {
   if (text.length <= SUMMARY_MAX_LEN) return text;
@@ -25,7 +26,7 @@ interface Section {
 export function parseReleaseNotes(
   body: string | undefined | null,
 ): ParsedReleaseNotes {
-  if (!body?.trim()) return { summary: "", details: [] };
+  if (!body?.trim()) return { summary: "", highlights: [] };
 
   let preamble: string[] = [];
   let current: Section | null = null;
@@ -71,7 +72,10 @@ export function parseReleaseNotes(
   }
   flush();
 
-  const first = paragraphs[0] ?? "";
-  const sentence = first.split(SENTENCE_BOUNDARY)[0];
-  return { summary: truncate(sentence), details: paragraphs };
+  const highlights = paragraphs.slice(0, HIGHLIGHT_LIMIT).map((paragraph) => {
+    const sentence = paragraph.split(SENTENCE_BOUNDARY)[0];
+    return truncate(sentence);
+  });
+
+  return { summary: highlights[0] ?? "", highlights };
 }
