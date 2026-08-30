@@ -540,11 +540,11 @@ body {
   @keyframes motion-dialog-content-in {
     from {
       opacity: 0;
-      transform: translate(-50%, -50%) scale(var(--scale-large));
+      scale: var(--scale-large);
     }
     to {
       opacity: 1;
-      transform: translate(-50%, -50%) scale(1);
+      scale: 1;
     }
   }
   .motion-dialog-overlay[data-state="open"] {

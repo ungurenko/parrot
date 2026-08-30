@@ -56,7 +56,7 @@ const PREVIEW_NOTES = [
 
 // Browser preview only: lets the update banner render outside Tauri.
 const PREVIEW_UPDATER: AutoUpdate = {
-  available: { version: "0.4.30", body: PREVIEW_NOTES } as unknown as Update,
+  available: { version: "0.4.31", body: PREVIEW_NOTES } as unknown as Update,
   status: "idle",
   progress: 0,
   errorDetails: null,
