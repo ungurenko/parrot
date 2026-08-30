@@ -2,16 +2,26 @@ import { useEffect } from "react";
 import { cleanupTauriListeners, isTauriRuntime, listenInTauri } from "@/lib/runtime";
 import type { Job, JobStage, SummaryStage } from "../types";
 
-interface JobQueued { id: string; sourceName: string; }
-interface JobProgress { id: string; stage: JobStage; percent: number; }
+interface JobQueued {
+  id: string;
+  sourceName: string;
+  sourceKind: NonNullable<Job["sourceKind"]>;
+  engine: NonNullable<Job["engine"]>;
+  language: NonNullable<Job["language"]>;
+}
+interface JobProgress {
+  id: string;
+  stage: Exclude<JobStage, null>;
+  percent: number;
+}
 interface JobDone {
   id: string;
   text: string;
   outputPath: string;
-  sourceKind: "localFile" | "youtube";
+  sourceKind: NonNullable<Job["sourceKind"]>;
   sourceValue: string;
-  engine: Job["engine"];
-  language: Job["language"];
+  engine: NonNullable<Job["engine"]>;
+  language: NonNullable<Job["language"]>;
 }
 interface JobError { id: string; message: string; }
 interface JobCanceled { id: string; }
@@ -44,6 +54,9 @@ export function jobsReducer(jobs: Job[], action: JobAction): Job[] {
         {
           id: action.payload.id,
           sourceName: action.payload.sourceName,
+          sourceKind: action.payload.sourceKind,
+          engine: action.payload.engine,
+          language: action.payload.language,
           status: "queued",
           stage: null,
           percent: 0,
@@ -58,7 +71,10 @@ export function jobsReducer(jobs: Job[], action: JobAction): Job[] {
               ...job,
               status: "running",
               stage: action.payload.stage,
-              percent: action.payload.percent,
+              percent:
+                job.stage === action.payload.stage
+                  ? Math.max(job.percent, clampedPercent(action.payload.percent))
+                  : clampedPercent(action.payload.percent),
             },
       );
     case "jobDone":
@@ -97,7 +113,7 @@ export function jobsReducer(jobs: Job[], action: JobAction): Job[] {
     case "jobCanceling":
       return updateJob(jobs, action.id, (job) =>
         job.status === "queued" || job.status === "running"
-          ? { ...job, status: "canceling", stage: null }
+          ? { ...job, status: "canceling" }
           : job,
       );
     case "summaryProgress":
@@ -133,6 +149,10 @@ export function jobsReducer(jobs: Job[], action: JobAction): Job[] {
         summaryError: undefined,
       }));
   }
+}
+
+function clampedPercent(percent: number): number {
+  return Math.min(100, Math.max(0, percent));
 }
 
 function updateJob(jobs: Job[], id: string, update: (job: Job) => Job): Job[] {

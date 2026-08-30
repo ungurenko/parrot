@@ -1,230 +1,281 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, type CSSProperties } from "react";
+import {
+  CheckIcon,
+  FileAudioIcon,
+  HourglassIcon,
+  InfoIcon,
+  LockKeyholeIcon,
+  VideoIcon,
+  XIcon,
+} from "lucide-react";
 import parrotImg from "/parrot.png";
+import "./ProcessingView.css";
+import { modeOptionForEngine } from "@/lib/engineModes";
 import { processingProgressMessage } from "@/lib/progressEstimate";
-import { CANCELLED_MARKER, type Job } from "../types";
+import { LANGUAGE_LABEL, type Job } from "../types";
 
 interface Props {
   job: Job;
   onCancel: (id: string) => void;
 }
 
-function statusText(job: Job): string {
-  if (job.status === "queued") return "В очереди…";
-  if (job.status === "canceling") return "Отменяю…";
-  if (job.status === "canceled") return "Отменено";
-  if (job.status === "error") {
-    return job.error === CANCELLED_MARKER ? "Отменено" : "Ошибка";
-  }
-  switch (job.stage) {
-    case "preparing":
-      return "Подготовка ссылки…";
-    case "extracting":
-      return job.percent > 0
-        ? `Извлечение аудио · ${job.percent}%`
-        : "Извлечение аудио…";
-    case "downloading":
-      return job.percent > 0
-        ? `Скачивание · ${job.percent}%`
-        : "Скачивание…";
-    case "transcribing":
-      return job.percent > 1
-        ? `Слушаю · ${job.percent}%`
-        : "Слушаю…";
-    default:
-      return "Слушаю…";
-  }
+type StageKey = "audio" | "transcribe" | "result";
+type StageState = "pending" | "active" | "done";
+
+interface PhaseClock {
+  key: string;
+  startedAt: number;
 }
 
-type StageKey = "prep" | "transcribe" | "save";
+type ProcessingRingStyle = CSSProperties & {
+  "--processing-progress": string;
+};
 
-function pipelineForJob(job: Job): {
-  current: StageKey;
-  labels: Record<StageKey, { title: string; sub: string }>;
-} {
-  const isYoutube =
-    job.stage === "downloading" || job.stage === "preparing";
-  const prepTitle = isYoutube ? "Скачивание" : "Извлечение";
-  const prepSub = isYoutube ? "из ссылки" : "из файла";
-
-  let current: StageKey = "prep";
-  if (job.stage === "transcribing") current = "transcribe";
-  if (job.status === "done") current = "save";
-
-  return {
-    current,
-    labels: {
-      prep: { title: prepTitle, sub: prepSub },
-      transcribe: { title: "Транскрибация", sub: "распознавание речи" },
-      save: { title: "Сохранение", sub: "в текстовый файл" },
-    },
-  };
-}
-
-const TIPS: string[] = [
-  "Всё обрабатывается локально — ни байта не уходит в сеть.",
-  "Движок можно поменять в настройках — Parakeet быстрее, Whisper точнее.",
-  "Модель уже загружена в память — следующие файлы пойдут ещё быстрее.",
-  "Можно закинуть сразу несколько файлов — они встанут в очередь.",
-  "Ошибки распознавания? Попробуйте Qwen3-ASR 1.7B для сложного аудио.",
+const PROCESSING_STAGES: ReadonlyArray<{ key: StageKey; title: string }> = [
+  { key: "audio", title: "Аудио" },
+  { key: "transcribe", title: "Распознавание" },
+  { key: "result", title: "Результат" },
 ];
 
-function useRotatingTip(intervalMs = 5500): string {
-  const [idx, setIdx] = useState(() => Math.floor(Math.random() * TIPS.length));
-  useEffect(() => {
-    const t = window.setInterval(() => {
-      setIdx((i) => (i + 1) % TIPS.length);
-    }, intervalMs);
-    return () => window.clearInterval(t);
-  }, [intervalMs]);
-  return TIPS[idx];
-}
-
-function StageItem({
-  state,
-  title,
-  sub,
-  percent,
-}: {
-  state: "pending" | "active" | "done";
-  title: string;
-  sub: string;
-  percent?: number;
-}) {
-  const cls =
-    state === "active" ? "stage-item active" : state === "done" ? "stage-item done" : "stage-item";
+function isYoutubeJob(job: Job): boolean {
   return (
-    <div className={cls}>
-      <div className="stage-head">
-        <span className="bullet" aria-hidden="true" />
-        <span>{title}</span>
-      </div>
-      <div className="stage-sub">
-        {state === "active" && percent !== undefined && percent > 0
-          ? `${sub} · ${percent}%`
-          : state === "done"
-            ? "готово"
-            : sub}
-      </div>
-    </div>
+    job.sourceKind === "youtube" ||
+    job.stage === "preparing" ||
+    job.stage === "downloading" ||
+    /^https?:\/\//i.test(job.sourceName)
   );
 }
 
+function processingContext(job: Job): string {
+  if (job.status === "queued") {
+    return "Задача уже в очереди — Parrot начнёт её автоматически.";
+  }
+  if (job.status === "canceling") {
+    return "Останавливаю обработку и очищаю временные файлы.";
+  }
+  if (job.stage === "preparing" || job.stage === "downloading") {
+    return "Сеть нужна только для загрузки YouTube. Распознавание продолжится на этом Mac.";
+  }
+  if (job.stage === "extracting") {
+    return "Подготавливаю звуковую дорожку. Исходный файл останется без изменений.";
+  }
+  if (job.stage === "transcribing") {
+    return "Распознавание идёт локально на этом Mac.";
+  }
+  return "Parrot готовит задачу к обработке.";
+}
+
+function currentStage(job: Job): StageKey {
+  return job.stage === "transcribing" ? "transcribe" : "audio";
+}
+
+function stageState(job: Job, key: StageKey): StageState {
+  const current = currentStage(job);
+  if (key === "audio" && current === "transcribe") return "done";
+  if (key === current) return "active";
+  return "pending";
+}
+
+function stageDetail(job: Job, key: StageKey, state: StageState): string {
+  if (state === "done") return "готово";
+  if (key === "result") return "сохранится автоматически";
+  if (key === "transcribe") {
+    if (state === "pending") return "следующий этап";
+    return job.percent > 1 ? `${job.percent}% готово` : "слушаю запись";
+  }
+  if (job.status === "queued") return "ждёт очереди";
+  if (job.stage === "preparing") return "готовлю ссылку";
+  if (job.stage === "downloading") {
+    return job.percent > 1
+      ? `${job.percent}% загружено`
+      : "загружаю из YouTube";
+  }
+  if (job.stage === "extracting") return "готовлю из файла";
+  return isYoutubeJob(job) ? "из YouTube" : "из файла";
+}
+
+function StageItem({
+  index,
+  state,
+  title,
+  detail,
+}: {
+  index: number;
+  state: StageState;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <li
+      className={`processing-stage ${state}`}
+      aria-current={state === "active" ? "step" : undefined}
+    >
+      <span className="processing-stage-marker" aria-hidden="true">
+        {state === "done" ? <CheckIcon size={14} strokeWidth={2.8} /> : index}
+      </span>
+      <span className="processing-stage-copy">
+        <strong>{title}</strong>
+        <span>{detail}</span>
+      </span>
+    </li>
+  );
+}
+
+function ContextIcon({ job }: { job: Job }) {
+  if (job.status === "queued") return <HourglassIcon size={16} />;
+  if (job.stage === "transcribing") return <LockKeyholeIcon size={16} />;
+  return <InfoIcon size={16} />;
+}
+
 export function ProcessingView({ job, onCancel }: Props) {
-  const startedAtRef = useRef(Date.now());
+  const phaseKey = `${job.id}:${job.status}:${job.stage ?? "none"}`;
+  const phaseClock = useRef<PhaseClock>({
+    key: phaseKey,
+    startedAt: Date.now(),
+  });
+  if (phaseClock.current.key !== phaseKey) {
+    phaseClock.current = { key: phaseKey, startedAt: Date.now() };
+  }
+
+  const progress = Math.min(100, Math.max(0, job.percent));
+  const progressKnown = job.stage !== "preparing" && progress > 1;
+  const indeterminate = job.status === "running" && !progressKnown;
   const calmProgress = processingProgressMessage({
     stage: job.stage,
-    percent: job.percent,
-    elapsedMs: Date.now() - startedAtRef.current,
+    percent: progress,
+    elapsedMs: Date.now() - phaseClock.current.startedAt,
   });
   const nearingEnd =
     job.status === "running" &&
     job.stage === "transcribing" &&
-    job.percent >= 95;
-  const status = job.status === "running"
-    ? nearingEnd
-      ? "Почти готово…"
-      : calmProgress.title
-    : statusText(job);
-  const percent = job.status === "running" ? Math.max(job.percent, 3) : 0;
-
-  const indeterminate =
-    job.status === "running" && job.percent <= 1 && job.stage === null;
-
-  const pipeline = pipelineForJob(job);
-  const tip = useRotatingTip();
-
-  const stageState = (key: StageKey): "pending" | "active" | "done" => {
-    const order: StageKey[] = ["prep", "transcribe", "save"];
-    const a = order.indexOf(pipeline.current);
-    const b = order.indexOf(key);
-    if (b < a) return "done";
-    if (b === a) return "active";
-    return "pending";
+    progress >= 95;
+  const status =
+    job.status === "queued"
+      ? "Жду предыдущую задачу"
+      : job.status === "canceling"
+        ? "Останавливаю задачу"
+        : calmProgress.title;
+  const statusDetail =
+    job.status === "queued"
+      ? "Начну автоматически, когда очередь дойдёт до этой записи."
+      : job.status === "canceling"
+        ? "Завершаю текущую операцию."
+        : nearingEnd
+          ? "Дорабатываю последнюю часть. Это может занять немного времени."
+          : calmProgress.detail;
+  const modeLabel = job.engine
+    ? modeOptionForEngine(job.engine).title
+    : "Текущий режим";
+  const languageLabel = LANGUAGE_LABEL[job.language ?? "auto"];
+  const youtube = isYoutubeJob(job);
+  const ringStyle: ProcessingRingStyle = {
+    "--processing-progress": `${progress * 3.6}deg`,
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-5 justify-center">
-      <div className="proc-card">
-        <div
-          className="parrot-pulse"
-          style={{ backgroundImage: `url(${parrotImg})` }}
-          aria-hidden="true"
-        />
-        <div className="min-w-0">
-          <h3 className="proc-filename" title={job.sourceName}>
-            {job.sourceName}
-          </h3>
-          <p className="proc-status">{status}</p>
-          {job.status === "running" && (
-            <p className="proc-detail">
-              {nearingEnd
-                ? "Дорабатываю последнюю часть. Это нормально, если немного задержится."
-                : calmProgress.detail}
-            </p>
-          )}
-          <div className="progress-track">
-            <div
-              className={
-                indeterminate ? "progress-fill indeterminate" : "progress-fill"
-              }
-              style={indeterminate ? undefined : { width: `${percent}%` }}
+    <div className="processing-workspace">
+      <article className="processing-card" aria-labelledby="processing-source-name">
+        <header className="processing-head">
+          <div className="processing-source">
+            <span className="processing-source-badge">
+              {youtube ? (
+                <VideoIcon size={15} aria-hidden="true" />
+              ) : (
+                <FileAudioIcon size={15} aria-hidden="true" />
+              )}
+              {youtube ? "YouTube" : "Файл"}
+            </span>
+            <h2
+              id="processing-source-name"
+              className="processing-source-name"
+              title={job.sourceName}
+            >
+              {job.sourceName}
+            </h2>
+          </div>
+
+          <div className="processing-controls">
+            <div className="processing-meta" aria-label="Параметры задачи">
+              <span>{modeLabel}</span>
+              <span>{languageLabel}</span>
+            </div>
+            <button
+              type="button"
+              className="processing-cancel"
+              disabled={job.status === "canceling"}
+              onClick={() => onCancel(job.id)}
+            >
+              <XIcon size={14} strokeWidth={2.4} aria-hidden="true" />
+              {job.status === "canceling" ? "Отменяю…" : "Отмена"}
+            </button>
+          </div>
+        </header>
+
+        <div className="processing-focus">
+          <div
+            className={`processing-orbit${indeterminate ? " indeterminate" : ""}${
+              job.status === "canceling" ? " stopping" : ""
+            }`}
+            style={ringStyle}
+            role="progressbar"
+            aria-label="Прогресс текущего этапа"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressKnown ? progress : undefined}
+            aria-valuetext={progressKnown ? `${progress}%` : "В процессе"}
+          >
+            <span
+              className="processing-avatar"
+              style={{ backgroundImage: `url(${parrotImg})` }}
+              aria-hidden="true"
             />
           </div>
+
+          <div className="processing-message">
+            <span className="processing-eyebrow">Текущий этап</span>
+            <div role="status" aria-live="polite" aria-atomic="true">
+              <h3
+                key={`${job.status}:${job.stage}:${nearingEnd}`}
+                className="motion-text-swap"
+              >
+                {status}
+              </h3>
+            </div>
+            <div className="processing-progress-copy">
+              {progressKnown && (
+                <strong key={progress} className="motion-number-pop">
+                  {progress}%
+                </strong>
+              )}
+              <span key={statusDetail} className="motion-text-swap">
+                {statusDetail}
+              </span>
+            </div>
+          </div>
         </div>
-      </div>
 
-      <div className="stages">
-        <StageItem
-          state={stageState("prep")}
-          title={pipeline.labels.prep.title}
-          sub={pipeline.labels.prep.sub}
-          percent={
-            job.stage === "extracting" || job.stage === "downloading"
-              ? job.percent
-              : undefined
-          }
-        />
-        <StageItem
-          state={stageState("transcribe")}
-          title={pipeline.labels.transcribe.title}
-          sub={pipeline.labels.transcribe.sub}
-          percent={job.stage === "transcribing" ? job.percent : undefined}
-        />
-        <StageItem
-          state={stageState("save")}
-          title={pipeline.labels.save.title}
-          sub={pipeline.labels.save.sub}
-        />
-      </div>
+        <ol className="processing-stages" aria-label="Этапы обработки">
+          {PROCESSING_STAGES.map((stage, index) => {
+            const state = stageState(job, stage.key);
+            return (
+              <StageItem
+                key={stage.key}
+                index={index + 1}
+                state={state}
+                title={stage.title}
+                detail={stageDetail(job, stage.key, state)}
+              />
+            );
+          })}
+        </ol>
 
-      <div className="tip-card" aria-live="polite">
-        <span className="tip-icon" aria-hidden="true">
-          💡
-        </span>
-        <span className="tip-text" key={tip}>
-          {tip}
-        </span>
-      </div>
-
-      <button
-        type="button"
-        className="ghost-btn self-center"
-        disabled={job.status === "canceling"}
-        onClick={() => onCancel(job.id)}
-      >
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2.5}
-          strokeLinecap="round"
-        >
-          <path d="M18 6L6 18M6 6l12 12" />
-        </svg>
-        {job.status === "canceling" ? "Отменяю…" : "Отмена"}
-      </button>
+        <div className="processing-context">
+          <span className="processing-context-icon" aria-hidden="true">
+            <ContextIcon job={job} />
+          </span>
+          <span>{processingContext(job)}</span>
+        </div>
+      </article>
     </div>
   );
 }

@@ -69,13 +69,15 @@ function titleForStage(stage: JobStage, percent: number): string {
     case "preparing":
       return "Готовлю ссылку";
     case "downloading":
-      return percent > 0 ? `Скачиваю · ${percent}%` : "Скачиваю";
+      return "Скачиваю аудио";
     case "extracting":
-      return percent > 0 ? `Достаю аудио · ${percent}%` : "Достаю аудио";
+      return "Подготавливаю аудио";
     case "transcribing":
-      return percent > 0 ? `Распознаю речь · ${percent}%` : "Распознаю речь";
+      return percent >= 95
+        ? "Заканчиваю распознавание"
+        : "Распознаю речь";
     default:
-      return "Работаю";
+      return "Начинаю обработку";
   }
 }
 

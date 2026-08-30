@@ -3,7 +3,6 @@ import {
   ArrowUpIcon,
   BellIcon,
   ChevronDownIcon,
-  ChevronUpIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -60,11 +59,7 @@ export function UpdateBannerView({
               aria-controls="update-banner-notes"
             >
               Что нового
-              {expanded ? (
-                <ChevronUpIcon size={12} />
-              ) : (
-                <ChevronDownIcon size={12} />
-              )}
+              <ChevronDownIcon className="update-banner-chevron" size={12} />
             </button>
           )}
         </div>
@@ -84,17 +79,24 @@ export function UpdateBannerView({
               Подробнее — в Настройках
             </button>
           </p>
-        ) : expanded && hasNotes ? (
-          <>
-            <div className="update-banner-meta">
-              Меньше минуты · Перезапустится автоматически
+        ) : hasNotes ? (
+          <div
+            id="update-banner-notes"
+            className="update-banner-disclosure"
+            data-open={expanded}
+            aria-hidden={!expanded}
+          >
+            <div className="update-banner-disclosure-inner">
+              <div className="update-banner-meta">
+                Меньше минуты · Перезапустится автоматически
+              </div>
+              <div className="update-banner-notes">
+                {notes.details.map((paragraph, idx) => (
+                  <p key={idx}>{paragraph}</p>
+                ))}
+              </div>
             </div>
-            <div id="update-banner-notes" className="update-banner-notes">
-              {notes.details.map((paragraph, idx) => (
-                <p key={idx}>{paragraph}</p>
-              ))}
-            </div>
-          </>
+          </div>
         ) : null}
       </div>
       <div className="update-banner-actions">

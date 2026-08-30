@@ -50,14 +50,14 @@ describe("UpdateBanner", () => {
     expect(html).toContain("Доступно обновление Parrot");
     expect(html).toContain("v0.4.27");
     expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain("Транскрибация стала заметно быстрее.");
-    expect(html).not.toContain("Длинные записи теперь обрабатываются стабильнее.");
+    expect(html).toContain('data-open="false" aria-hidden="true"');
   });
 
   it("reveals release notes and installation details on demand", () => {
     const html = renderBanner({ expanded: true });
 
     expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('data-open="true" aria-hidden="false"');
     expect(html).toContain("Транскрибация стала заметно быстрее.");
     expect(html).toContain("Длинные записи теперь обрабатываются стабильнее.");
     expect(html).toContain("Меньше минуты · Перезапустится автоматически");

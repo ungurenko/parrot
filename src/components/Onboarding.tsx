@@ -195,7 +195,7 @@ export function Onboarding({ onDone }: Props) {
           )}
 
           {step === "setup" && settings && selectedMode && (
-            <FieldGroup className="gap-5">
+            <FieldGroup className="onboarding-step-motion gap-5">
               <Field>
                 <FieldLabel htmlFor="onboarding-save-dir">
                   Папка для готовых текстов
@@ -271,7 +271,7 @@ export function Onboarding({ onDone }: Props) {
           )}
 
           {step === "downloading" && (
-            <div className="flex flex-col gap-4">
+            <div className="onboarding-step-motion flex flex-col gap-4">
               <div className="text-sm font-medium">{progressMessage.title}</div>
               <Progress
                 value={Math.max(progress, 2)}
@@ -287,8 +287,11 @@ export function Onboarding({ onDone }: Props) {
           )}
 
           {step === "ready" && (
-            <div className="flex flex-col gap-3 text-sm">
-              <div>✅ Всё готово!</div>
+            <div className="onboarding-step-motion flex flex-col gap-3 text-sm">
+              <div className="onboarding-success">
+                <span className="onboarding-success-mark" aria-hidden="true">✓</span>
+                <strong>Всё готово!</strong>
+              </div>
               <div className="text-muted-foreground">
                 Можно начинать расшифровывать аудио и видео.
               </div>

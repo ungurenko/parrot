@@ -40,6 +40,9 @@ pub struct Job {
 pub struct JobQueuedEvent {
     pub id: String,
     pub source_name: String,
+    pub source_kind: &'static str,
+    pub engine: String,
+    pub language: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,6 +195,9 @@ impl JobQueue {
             JobQueuedEvent {
                 id: job.id.clone(),
                 source_name: job.display_name.clone(),
+                source_kind: source_kind_name(&job.source),
+                engine: job.engine.clone(),
+                language: job.language.clone(),
             },
         );
         self.active_count.fetch_add(1, Ordering::Relaxed);
@@ -488,8 +494,7 @@ async fn transcribe_prepared(
                     break;
                 }
                 let elapsed = started.elapsed().as_secs_f64();
-                let ratio = (elapsed / expected_sec).min(0.95);
-                let pct = (5.0 + ratio * 90.0) as u32;
+                let pct = estimated_qwen_progress(elapsed, expected_sec);
                 let _ = ticker_app.emit(
                     "job:progress",
                     JobProgressEvent {
@@ -644,11 +649,17 @@ fn emit_progress(app: &AppHandle, id: &str, stage: &str, percent: u32) {
 }
 
 fn source_metadata(source: &SourceKind) -> (String, String) {
+    let source_kind = source_kind_name(source).to_string();
     match source {
-        SourceKind::LocalFile(path) => {
-            ("localFile".to_string(), path.to_string_lossy().to_string())
-        }
-        SourceKind::YouTube(url) => ("youtube".to_string(), url.clone()),
+        SourceKind::LocalFile(path) => (source_kind, path.to_string_lossy().to_string()),
+        SourceKind::YouTube(url) => (source_kind, url.clone()),
+    }
+}
+
+fn source_kind_name(source: &SourceKind) -> &'static str {
+    match source {
+        SourceKind::LocalFile(_) => "localFile",
+        SourceKind::YouTube(_) => "youtube",
     }
 }
 
@@ -665,6 +676,11 @@ fn wav_duration_seconds(path: &Path) -> Option<f64> {
     Some(bytes as f64 / 32_000.0)
 }
 
+fn estimated_qwen_progress(elapsed_sec: f64, expected_sec: f64) -> u32 {
+    let ratio = (elapsed_sec / expected_sec.max(f64::EPSILON)).clamp(0.0, 1.0);
+    (5.0 + ratio * 90.0) as u32
+}
+
 pub fn new_job_id() -> String {
     Uuid::new_v4().to_string()
 }
@@ -672,6 +688,31 @@ pub fn new_job_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_event_serializes_processing_metadata_in_camel_case() {
+        let event = JobQueuedEvent {
+            id: "job-1".to_string(),
+            source_name: "Встреча.m4a".to_string(),
+            source_kind: "localFile",
+            engine: "parakeet".to_string(),
+            language: "ru".to_string(),
+        };
+
+        let json = serde_json::to_value(event).expect("queued event json");
+        assert_eq!(json["sourceName"], "Встреча.m4a");
+        assert_eq!(json["sourceKind"], "localFile");
+        assert_eq!(json["engine"], "parakeet");
+        assert_eq!(json["language"], "ru");
+    }
+
+    #[test]
+    fn qwen_progress_reaches_95_without_exceeding_it() {
+        assert_eq!(estimated_qwen_progress(0.0, 100.0), 5);
+        assert_eq!(estimated_qwen_progress(50.0, 100.0), 50);
+        assert_eq!(estimated_qwen_progress(100.0, 100.0), 95);
+        assert_eq!(estimated_qwen_progress(150.0, 100.0), 95);
+    }
 
     #[test]
     fn active_job_slot_should_keep_count_until_terminal_drop() {

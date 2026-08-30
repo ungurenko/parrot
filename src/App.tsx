@@ -26,6 +26,7 @@ import {
 import { SHORTCUT_GLYPH, displayShortcut } from "./lib/shortcuts";
 import { modeOptionForEngine } from "./lib/engineModes";
 import { formatErrorDescription, userErrorFrom } from "./lib/userErrors";
+import { createBrowserPreview } from "./lib/browserPreview";
 import {
   type DictationPhase,
   type DictationStatus,
@@ -42,11 +43,11 @@ type ViewState =
 const PREVIEW_NOTES = [
   "## 🎯 Что нового",
   "",
-  "Транскрибация стала заметно быстрее: модель теперь постоянно живёт в памяти, поэтому файлы и голосовые начинаются сразу, без паузы на загрузку.",
+  "Экран обработки полностью обновлён: источник, режим, язык, статус, прогресс и следующие этапы теперь собраны в одной рабочей области.",
   "",
-  "Parrot сам подстраивается под конкретный Mac — на машинах с 16 ГБ памяти работает быстрый режим на видеокарте.",
+  "Вокруг попугая появился живой круг прогресса, а анимации во всём приложении стали мягче и выразительнее.",
   "",
-  "Прогресс на длинных записях теперь двигается по ходу обработки.",
+  "Системная настройка уменьшения движения полностью соблюдается.",
   "",
   "## 📦 Как получить обновление",
   "",
@@ -55,7 +56,7 @@ const PREVIEW_NOTES = [
 
 // Browser preview only: lets the update banner render outside Tauri.
 const PREVIEW_UPDATER: AutoUpdate = {
-  available: { version: "0.4.27", body: PREVIEW_NOTES } as unknown as Update,
+  available: { version: "0.4.28", body: PREVIEW_NOTES } as unknown as Update,
   status: "idle",
   progress: 0,
   errorDetails: null,
@@ -63,6 +64,11 @@ const PREVIEW_UPDATER: AutoUpdate = {
   runCheck: async () => {},
   install: async () => {},
 };
+
+const BROWSER_PREVIEW = createBrowserPreview(
+  typeof window === "undefined" ? "" : window.location.search,
+  !isTauriRuntime(),
+);
 
 const isActiveJob = (j: Job) =>
   j.status === "running" || j.status === "queued" || j.status === "canceling";
@@ -100,7 +106,7 @@ function pluralFiles(n: number): string {
 }
 
 function App() {
-  const [jobs, dispatchJobs] = useReducer(jobsReducer, []);
+  const [jobs, dispatchJobs] = useReducer(jobsReducer, BROWSER_PREVIEW.jobs);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [historyJob, setHistoryJob] = useState<Job | null>(null);
   const selectedIdRef = useRef<string | null>(selectedId);
@@ -128,7 +134,11 @@ function App() {
   useEffect(() => {
     (async () => {
       if (!isTauriRuntime()) {
-        setSettings(previewSettings(""));
+        const preview = previewSettings("");
+        if (BROWSER_PREVIEW.theme) {
+          preview.theme = BROWSER_PREVIEW.theme;
+        }
+        setSettings(preview);
         setNeedsOnboarding(false);
         setDictationPhase("idle");
         return;
@@ -390,7 +400,11 @@ function App() {
         ? "idle"
         : "";
 
-  const bannerUpdater = isTauriRuntime() ? updater : PREVIEW_UPDATER;
+  const bannerUpdater = isTauriRuntime()
+    ? updater
+    : BROWSER_PREVIEW.processing
+      ? { ...PREVIEW_UPDATER, available: null }
+      : PREVIEW_UPDATER;
 
   return (
     <main className="app-shell flex h-full flex-col">

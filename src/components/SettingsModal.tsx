@@ -1226,7 +1226,10 @@ export function SettingsModal({
         <div className="settings-layout min-h-0 min-w-0 flex-1">
           <SettingsTabs active={activeTab} onChange={setActiveTab} />
 
-          <FieldGroup className="settings-content min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+          <FieldGroup
+            key={activeTab}
+            className="settings-content settings-tab-motion min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden"
+          >
             {settingsError && (
               <Alert variant="destructive">
                 <AlertDescription className="whitespace-pre-wrap break-words">

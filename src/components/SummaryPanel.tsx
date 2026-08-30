@@ -339,7 +339,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       </div>
 
       {!available && (
-        <Alert variant="default" className="summary-unavailable">
+        <Alert variant="default" className="summary-unavailable summary-state-motion">
           <AlertTitle>Окружение для конспекта не установлено</AlertTitle>
           <AlertDescription className="whitespace-pre-wrap break-words">
             {unavailableReason}
@@ -348,7 +348,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       )}
 
       {available && !modelReady && !modelInstalling && (
-        <div className="summary-promo">
+        <div className="summary-promo summary-state-motion">
           <p className="summary-promo-text">
             Соберите краткий конспект встречи: резюме, темы, тезисы и список
             действий. Нужно один раз скачать локальную модель ({summaryModelSize}).
@@ -367,7 +367,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       )}
 
       {available && modelInstalling && (
-        <div className="summary-progress">
+        <div className="summary-progress summary-state-motion">
           <Progress
             value={Math.max(modelProgress, 2)}
             className={modelStage === "warmup" ? "animate-pulse" : ""}
@@ -393,7 +393,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       )}
 
       {available && modelReady && status === "idle" && (
-        <div className="summary-empty">
+        <div className="summary-empty summary-state-motion">
           <p className="summary-empty-text">
             Соберите краткий конспект встречи: резюме, темы, тезисы и список
             действий.
@@ -409,7 +409,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       )}
 
       {available && modelReady && status === "generating" && (
-        <div className="summary-progress">
+        <div className="summary-progress summary-state-motion">
           <Progress value={Math.max(percent, 2)} />
           <div className="summary-progress-text">
             {stageLabel(job.summaryStage)} {percent}%
@@ -418,7 +418,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       )}
 
       {available && modelReady && status === "error" && (
-        <div className="flex flex-col gap-3">
+        <div className="summary-state-motion flex flex-col gap-3">
           <Alert variant="destructive">
           <AlertTitle>Не удалось создать конспект</AlertTitle>
           <AlertDescription className="whitespace-pre-wrap break-words">
@@ -432,7 +432,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       )}
 
       {available && modelReady && status === "done" && rendered && (
-        <article className="summary-body">{rendered}</article>
+        <article className="summary-body summary-state-motion">{rendered}</article>
       )}
     </div>
   );

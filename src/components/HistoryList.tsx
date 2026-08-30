@@ -168,12 +168,16 @@ export function HistoryList({
             />
           )}
           {showFilters && (
-            <div className="history-filters" role="tablist" aria-label="Фильтр истории">
+            <div
+              className="history-filters"
+              role="group"
+              aria-label="Фильтр истории"
+            >
               {FILTERS.map((item) => (
                 <button
                   key={item.id}
                   type="button"
-                  className={filter === item.id ? "active" : ""}
+                  aria-pressed={filter === item.id}
                   onClick={() => setFilter(item.id)}
                 >
                   {item.label}
@@ -196,7 +200,7 @@ export function HistoryList({
           <div className="history-group-title">{group.label}</div>
           <ul className="history-items">
             {group.entries.map((entry) => (
-              <li key={entry.id} className="history-item">
+              <li key={entry.id} className="history-item motion-history-item">
                 <span className="history-media" aria-hidden="true">
                   {mediaIcon(entry.sourceName)}
                 </span>
