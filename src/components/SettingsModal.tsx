@@ -28,6 +28,7 @@ import { Separator } from "@/components/ui/separator";
 import {
   ACTIVE_JOB_DELETE_HINT,
   ACTIVE_JOB_SWITCH_HINT,
+  ACTIVE_LOCAL_MODEL_HINT,
   DEFAULT_SUMMARY_MODEL,
   ENGINE_LABEL,
   LANGUAGE_LABEL,
@@ -78,6 +79,7 @@ interface Props {
   onClose: () => void;
   updater: AutoUpdate;
   hasActiveJob: boolean;
+  hasActiveLocalModelJob: boolean;
   initialTab?: SettingsTab;
 }
 
@@ -140,8 +142,8 @@ const SETTINGS_TABS: Array<{
   },
   {
     id: "summary",
-    label: "Конспект",
-    hint: "Локальный LLM",
+    label: "Локальная модель",
+    hint: "Конспект и перевод",
     Icon: FileTextIcon,
   },
   {
@@ -512,6 +514,7 @@ interface SummarySettingsSectionProps {
   status: SummarizerStatus | null;
   busy: boolean;
   deleting: boolean;
+  generationBusy: boolean;
   progress: number;
   stage: ModelStage;
   envSetupBusy: boolean;
@@ -529,6 +532,7 @@ function SummarySettingsSection({
   status,
   busy,
   deleting,
+  generationBusy,
   progress,
   stage,
   envSetupBusy,
@@ -541,7 +545,7 @@ function SummarySettingsSection({
 }: SummarySettingsSectionProps) {
   return (
     <Field className="min-w-0">
-      <FieldLabel>Конспект</FieldLabel>
+      <FieldLabel>Конспекты и переводы</FieldLabel>
       <label className="summary-toggle">
         <input
           type="checkbox"
@@ -549,11 +553,10 @@ function SummarySettingsSection({
           onChange={(e) => onToggle(e.target.checked)}
         />
         <span>
-          Показывать блок конспекта в результате транскрипции
+          Включить локальные конспекты и переводы
           <span className="summary-toggle-hint">
-            Кнопка «Сгенерировать» появится под каждым готовым транскриптом.
-            Выбранная модель конспекта работает полностью оффлайн после первой
-            загрузки.
+            Одна модель создаёт конспекты и переводит тексты на русский. После
+            первой загрузки всё работает офлайн.
           </span>
         </span>
       </label>
@@ -570,7 +573,7 @@ function SummarySettingsSection({
                   summaryModel === model && "selected",
                 )}
                 onClick={() => onSummaryModelChange(model)}
-                disabled={busy || deleting}
+                disabled={busy || deleting || generationBusy}
               >
                 <span className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="font-medium leading-snug">
@@ -613,7 +616,7 @@ function SummarySettingsSection({
                   <span className="mt-1 block whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">
                     {status?.unavailableReason
                       ? formatErrorDescription(status.unavailableReason)
-                      : `Разовая загрузка ${SUMMARY_MODEL_SIZE[summaryModel]}. После этого конспекты создаются оффлайн.`}
+                      : `Разовая загрузка ${SUMMARY_MODEL_SIZE[summaryModel]}. После этого конспекты и переводы создаются офлайн.`}
                   </span>
                 </span>
               </div>
@@ -627,7 +630,7 @@ function SummarySettingsSection({
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={envSetupBusy}
+                    disabled={envSetupBusy || generationBusy}
                     onClick={onSetupEnv}
                     title="Установить Python-окружение для конспекта"
                   >
@@ -639,7 +642,7 @@ function SummarySettingsSection({
                     type="button"
                     variant="outline"
                     size={busy ? "sm" : "icon-sm"}
-                    disabled={busy || deleting}
+                    disabled={busy || deleting || generationBusy}
                     onClick={onPrepareModel}
                     title="Подготовить модель конспекта"
                   >
@@ -651,7 +654,7 @@ function SummarySettingsSection({
                     type="button"
                     variant="destructive"
                     size="icon-sm"
-                    disabled={busy || deleting}
+                    disabled={busy || deleting || generationBusy}
                     onClick={onDeleteModel}
                     title="Удалить модель конспекта"
                   >
@@ -752,6 +755,7 @@ export function SettingsModal({
   onClose,
   updater,
   hasActiveJob,
+  hasActiveLocalModelJob,
   initialTab,
 }: Props) {
   const previewMode = !isTauriRuntime();
@@ -999,6 +1003,10 @@ export function SettingsModal({
 
   const changeSummaryModel = async (summary_model: SummaryModel) => {
     if (!settings || summary_model === settings.summary_model) return;
+    if (hasActiveLocalModelJob) {
+      setSettingsError(ACTIVE_LOCAL_MODEL_HINT);
+      return;
+    }
     const next = { ...settings, summary_model };
     if (previewMode) {
       await saveSettings(next);
@@ -1130,6 +1138,10 @@ export function SettingsModal({
   }, [capturingShortcut, settings]);
 
   const setupSummarizerEnv = async () => {
+    if (hasActiveLocalModelJob) {
+      setSettingsError(ACTIVE_LOCAL_MODEL_HINT);
+      return;
+    }
     if (previewMode) {
       setSummarizerStatus({ available: true, modelReady: false });
       setEnvSetupStatus(null);
@@ -1151,6 +1163,10 @@ export function SettingsModal({
   };
 
   const prepareSummarizerModel = async () => {
+    if (hasActiveLocalModelJob) {
+      setSettingsError(ACTIVE_LOCAL_MODEL_HINT);
+      return;
+    }
     if (previewMode) {
       setSummarizerStatus({ available: true, modelReady: true });
       setSummaryProgress(100);
@@ -1176,6 +1192,10 @@ export function SettingsModal({
   };
 
   const deleteSummarizerModel = async () => {
+    if (hasActiveLocalModelJob) {
+      setSettingsError(ACTIVE_LOCAL_MODEL_HINT);
+      return;
+    }
     if (!summarizerStatus?.modelReady) return;
     const summaryModel = settings?.summary_model ?? DEFAULT_SUMMARY_MODEL;
     const ok = window.confirm(
@@ -1294,6 +1314,7 @@ export function SettingsModal({
                 status={summarizerStatus}
                 busy={summaryBusy}
                 deleting={summaryDeleting}
+                generationBusy={hasActiveLocalModelJob}
                 progress={summaryProgress}
                 stage={summaryStage}
                 envSetupBusy={envSetupBusy}

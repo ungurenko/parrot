@@ -12,7 +12,7 @@ import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { Onboarding } from "./components/Onboarding";
 import { Toaster } from "@/components/ui/sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { jobsReducer, useJobEvents } from "./hooks/useJobEvents";
+import { jobsForQueue, jobsReducer, useJobEvents } from "./hooks/useJobEvents";
 import { useHistory } from "./hooks/useHistory";
 import { useAutoUpdate, type AutoUpdate } from "./hooks/useAutoUpdate";
 import { useTheme } from "./hooks/useTheme";
@@ -27,6 +27,7 @@ import { SHORTCUT_GLYPH, displayShortcut } from "./lib/shortcuts";
 import { modeOptionForEngine } from "./lib/engineModes";
 import { formatErrorDescription, userErrorFrom } from "./lib/userErrors";
 import { createBrowserPreview } from "./lib/browserPreview";
+import { localModelBusy } from "./lib/jobArtifacts";
 import {
   type DictationPhase,
   type DictationStatus,
@@ -108,7 +109,6 @@ function pluralFiles(n: number): string {
 function App() {
   const [jobs, dispatchJobs] = useReducer(jobsReducer, BROWSER_PREVIEW.jobs);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [historyJob, setHistoryJob] = useState<Job | null>(null);
   const selectedIdRef = useRef<string | null>(selectedId);
   selectedIdRef.current = selectedId;
   const jobsRef = useRef(jobs);
@@ -290,12 +290,28 @@ function App() {
           outputPath: loaded.entry.outputPath,
           engine: loaded.entry.engine as Job["engine"],
           language: loaded.entry.language as Job["language"],
-          summary: loaded.summary,
-          summaryPath: loaded.entry.summaryPath,
-          summaryStatus: loaded.summary ? "done" : undefined,
-          summaryPercent: loaded.summary ? 100 : undefined,
+          summary:
+            loaded.summary && loaded.entry.summaryPath
+              ? {
+                  status: "done",
+                  result: {
+                    content: loaded.summary,
+                    outputPath: loaded.entry.summaryPath,
+                  },
+                }
+              : undefined,
+          translation:
+            loaded.translation && loaded.entry.translationPath
+              ? {
+                  status: "done",
+                  result: {
+                    content: loaded.translation,
+                    outputPath: loaded.entry.translationPath,
+                  },
+                }
+              : undefined,
         };
-        setHistoryJob(rehydrated);
+        dispatchJobs({ type: "historyLoaded", payload: rehydrated });
         setSelectedId(rehydrated.id);
       } catch (e) {
         const friendly = userErrorFrom(e);
@@ -348,13 +364,14 @@ function App() {
     [deleteEntry],
   );
 
-  const queueJobs = useMemo(
-    () => (historyJob ? jobs.filter((j) => j.id !== historyJob.id) : jobs),
-    [jobs, historyJob],
-  );
-  const view = useMemo(() => pickView(historyJob ? [historyJob, ...jobs] : jobs, selectedId), [historyJob, jobs, selectedId]);
+  const queueJobs = useMemo(() => jobsForQueue(jobs), [jobs]);
+  const view = useMemo(() => pickView(jobs, selectedId), [jobs, selectedId]);
 
   const hasActiveJob = useMemo(() => jobs.some(isActiveJob), [jobs]);
+  const hasActiveLocalModelJob = useMemo(
+    () => jobs.some(localModelBusy),
+    [jobs],
+  );
 
   const openSettings = useCallback((tab: SettingsTab = "basic") => {
     setSettingsTab(tab);
@@ -499,12 +516,13 @@ function App() {
           )}
           {view.kind === "result" && settings && (
             <ResultView
+              key={view.job.id}
               job={view.job}
               onReset={resetToEmpty}
               engineLabel={engineLabel}
               settings={settings}
               onSettingsChange={setSettings}
-              onOpenSettings={() => openSettings("models")}
+              onOpenSettings={openSettings}
             />
           )}
           </div>
@@ -529,6 +547,7 @@ function App() {
         <SettingsModal
           updater={updater}
           hasActiveJob={hasActiveJob}
+          hasActiveLocalModelJob={hasActiveLocalModelJob}
           initialTab={settingsTab}
           onClose={() => {
             setSettingsOpen(false);

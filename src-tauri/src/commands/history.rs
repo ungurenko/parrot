@@ -28,6 +28,8 @@ pub(crate) struct LoadedHistoryEntry {
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    translation: Option<String>,
 }
 
 #[tauri::command]
@@ -42,9 +44,15 @@ pub(crate) fn load_history_entry(id: String, app: AppHandle) -> Result<LoadedHis
         .as_ref()
         .and_then(|p| validate_saved_file_path(&app, p, SavedFileKind::Summary).ok())
         .and_then(|p| std::fs::read_to_string(p).ok());
+    let translation = entry
+        .translation_path
+        .as_ref()
+        .and_then(|p| validate_saved_file_path(&app, p, SavedFileKind::Translation).ok())
+        .and_then(|p| std::fs::read_to_string(p).ok());
     Ok(LoadedHistoryEntry {
         entry,
         text,
         summary,
+        translation,
     })
 }

@@ -54,6 +54,19 @@ describe("userErrors", () => {
     expect(error.action).toContain("нажмите «Установить окружение» ещё раз");
   });
 
+  it("explains local translation failures", () => {
+    const error = userErrorFrom("Модель перевода завершилась с ошибкой");
+
+    expect(error.title).toBe("Перевод не создался");
+    expect(error.action).toContain("попробуйте ещё раз");
+  });
+
+  it("does not present a cut-off model response as success", () => {
+    const error = userErrorFrom("Локальная модель достигла лимита ответа");
+
+    expect(error.title).toBe("Перевод не создался");
+  });
+
   it("explains dictation access problems in normal macOS words", () => {
     const error = userErrorFrom(
       "Не удалось найти активное поле ввода (AX error -25205).",

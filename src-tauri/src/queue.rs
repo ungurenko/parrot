@@ -324,6 +324,7 @@ async fn handle_prepared_outcome(
                         created_at: history::now_iso8601(),
                         output_path: output_path_str.clone(),
                         summary_path: None,
+                        translation_path: None,
                     };
                     if let Err(e) = history::append(app, entry) {
                         tracing::warn!("history append failed for job {}: {e:#}", job.id);

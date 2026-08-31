@@ -5,6 +5,8 @@ mod dictation;
 mod fs_metrics;
 mod hardware;
 mod history;
+mod local_llm;
+mod local_llm_tasks;
 mod mlx_env;
 mod model;
 mod paths;
@@ -17,6 +19,7 @@ mod summarizer_qwen3;
 mod transcriber;
 mod transcriber_parakeet;
 mod transcriber_qwen;
+mod translation;
 mod writer;
 
 use std::path::{Path, PathBuf};
@@ -27,12 +30,13 @@ use parking_lot::Mutex;
 use tauri::{AppHandle, Manager, State};
 
 use cancellation::CancelRegistry;
+use local_llm_tasks::LocalLlmTasks;
 use queue::JobQueue;
 use settings::Settings;
 
 pub struct AppState {
     pub(crate) queue: Arc<JobQueue>,
-    pub(crate) summary_cancel: CancelRegistry,
+    pub(crate) local_llm_tasks: LocalLlmTasks,
     pub(crate) model_cancel: CancelRegistry,
 }
 
@@ -61,7 +65,7 @@ fn shutdown_runtime(app: &AppHandle) {
     summarizer_qwen3::stop_server();
     transcriber_parakeet::stop_worker();
     if let Some(state) = app.try_state::<AppState>() {
-        state.summary_cancel.cancel_all();
+        state.local_llm_tasks.cancel_all();
         state.model_cancel.cancel_all();
     }
 }
@@ -96,6 +100,15 @@ fn set_settings(
     new: Settings,
 ) -> Result<(), String> {
     let old = settings::load(&app);
+    let summary_model_changed = old.summary_model != new.summary_model;
+    let local_tasks = state.local_llm_tasks.clone();
+    let model_change_task = if summary_model_changed {
+        Some(local_tasks.try_start("model:settings").ok_or_else(|| {
+            "Локальная модель занята. Дождитесь завершения текущей задачи.".to_string()
+        })?)
+    } else {
+        None
+    };
     if old.engine != new.engine && state.queue.has_active_jobs() {
         return Err(
             "Нельзя менять движок во время активной транскрибации. Дождитесь окончания или отмените задачу."
@@ -124,12 +137,12 @@ fn set_settings(
             transcriber_parakeet::spawn_mlx_install(app.clone());
         }
     }
-    if old.summary_model != new.summary_model {
+    if summary_model_changed {
         summarizer_qwen3::stop_server();
     }
-    if new.summarizer_enabled && (!old.summarizer_enabled || old.summary_model != new.summary_model)
-    {
-        summarizer_qwen3::preload_server(app.clone());
+    drop(model_change_task);
+    if new.summarizer_enabled && (!old.summarizer_enabled || summary_model_changed) {
+        summarizer_qwen3::preload_server(app.clone(), local_tasks);
     }
     Ok(())
 }
@@ -138,6 +151,7 @@ fn set_settings(
 pub(crate) enum SavedFileKind {
     Transcript,
     Summary,
+    Translation,
 }
 
 pub(crate) fn validate_saved_file_path(
@@ -180,15 +194,26 @@ fn allowed_saved_file_dirs(app: &AppHandle) -> Vec<PathBuf> {
 pub(crate) fn saved_file_kind_matches(path: &Path, kind: SavedFileKind) -> bool {
     match kind {
         SavedFileKind::Transcript => {
-            path.extension()
+            !path
+                .file_name()
                 .and_then(|s| s.to_str())
-                .map(|s| s.eq_ignore_ascii_case("txt"))
-                == Some(true)
+                .is_some_and(|s| s.ends_with(".translation.ru.txt"))
+                && path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.eq_ignore_ascii_case("txt"))
+                    == Some(true)
         }
         SavedFileKind::Summary => {
             path.file_name()
                 .and_then(|s| s.to_str())
                 .map(|s| s.ends_with(".summary.md"))
+                == Some(true)
+        }
+        SavedFileKind::Translation => {
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.ends_with(".translation.ru.txt"))
                 == Some(true)
         }
     }
@@ -297,11 +322,11 @@ pub fn run() {
             let _ = std::fs::create_dir_all(&s.save_dir);
 
             let queue = JobQueue::start(handle.clone());
-            let summary_cancel = CancelRegistry::new();
+            let local_llm_tasks = LocalLlmTasks::new();
             let model_cancel = CancelRegistry::new();
             app.manage(AppState {
                 queue,
-                summary_cancel,
+                local_llm_tasks: local_llm_tasks.clone(),
                 model_cancel,
             });
             app.manage(dictation.clone());
@@ -320,7 +345,7 @@ pub fn run() {
                 transcriber_parakeet::spawn_mlx_install(handle.clone());
             }
             if s.summarizer_enabled {
-                summarizer_qwen3::preload_server(handle.clone());
+                summarizer_qwen3::preload_server(handle.clone(), local_llm_tasks);
             }
             binaries::warm_yt_dlp_startup_cache(handle.clone());
             dictation.start_worker(handle.clone());
@@ -354,6 +379,8 @@ pub fn run() {
             commands::summary::delete_summarizer_model,
             commands::summary::summarize,
             commands::summary::cancel_summary,
+            commands::translation::translate_to_russian,
+            commands::translation::cancel_translation,
             commands::history::get_history,
             commands::history::delete_history_entry,
             commands::history::clear_history,
@@ -385,12 +412,20 @@ mod tests {
             Path::new("/tmp/audio.summary.md"),
             SavedFileKind::Summary
         ));
+        assert!(saved_file_kind_matches(
+            Path::new("/tmp/audio.translation.ru.txt"),
+            SavedFileKind::Translation
+        ));
         assert!(!saved_file_kind_matches(
             Path::new("/tmp/audio.md"),
             SavedFileKind::Summary
         ));
         assert!(!saved_file_kind_matches(
             Path::new("/tmp/audio.summary.md"),
+            SavedFileKind::Transcript
+        ));
+        assert!(!saved_file_kind_matches(
+            Path::new("/tmp/audio.translation.ru.txt"),
             SavedFileKind::Transcript
         ));
     }

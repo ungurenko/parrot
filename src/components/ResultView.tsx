@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import {
   CopyIcon,
   FolderOpenIcon,
+  LanguagesIcon,
   RefreshCwIcon,
   SparklesIcon,
 } from "lucide-react";
@@ -21,11 +22,15 @@ import {
   type EngineStatuses,
   type Job,
   type Settings,
+  type SummarizerStatus,
   type TranscriptLanguage,
 } from "../types";
 import { SummaryPanel } from "./SummaryPanel";
+import type { SettingsTab } from "./SettingsModal";
+import { TranslationStatus } from "./TranslationStatus";
 import { formatErrorDescription, userErrorFrom } from "@/lib/userErrors";
 import { readableEngineName } from "@/lib/engineModes";
+import { localModelBusy, translationResult } from "@/lib/jobArtifacts";
 
 interface Props {
   job: Job;
@@ -33,7 +38,7 @@ interface Props {
   engineLabel?: string;
   settings: Settings;
   onSettingsChange: (next: Settings) => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (tab: SettingsTab) => void;
 }
 
 const PLAIN_TRANSCRIPT_CHAR_LIMIT = 50_000;
@@ -60,11 +65,18 @@ export function ResultView({
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [pendingAutoDownload, setPendingAutoDownload] = useState(false);
   const [promoBusy, setPromoBusy] = useState(false);
+  const [activeTextView, setActiveTextView] = useState<"original" | "translation">("original");
   const summarizerEnabled = settings.summarizer_enabled;
+  const translation = translationResult(job.translation);
+  const modelBusy = localModelBusy(job);
+  const visibleText =
+    activeTextView === "translation" && translation
+      ? translation.content
+      : (job.text ?? "");
 
   const transcriptView = useMemo<TranscriptView>(() => {
-    if (!job.text) return { kind: "segments", segments: [] };
-    const trimmed = job.text.trim();
+    if (!visibleText) return { kind: "segments", segments: [] };
+    const trimmed = visibleText.trim();
     const lineCount = (trimmed.match(/\n/g)?.length ?? 0) + 1;
     if (
       trimmed.length > PLAIN_TRANSCRIPT_CHAR_LIMIT ||
@@ -81,7 +93,7 @@ export function ResultView({
             .map((s) => s.trim())
             .filter(Boolean);
     return { kind: "segments", segments };
-  }, [job.text]);
+  }, [visibleText]);
   const segments =
     transcriptView.kind === "segments" ? transcriptView.segments : [];
 
@@ -99,7 +111,7 @@ export function ResultView({
     }
   };
 
-  const enableSummarizerAndDownload = async () => {
+  const enableLocalModelAndDownload = async () => {
     if (promoBusy) return;
     setPromoBusy(true);
     const ok = await updateSettings({
@@ -186,8 +198,8 @@ export function ResultView({
 
   const copyText = async () => {
     try {
-      await navigator.clipboard.writeText(job.text ?? "");
-      toast.success("Скопировано");
+      await navigator.clipboard.writeText(visibleText);
+      toast.success(activeTextView === "translation" ? "Перевод скопирован" : "Скопировано");
     } catch (e) {
       const friendly = userErrorFrom(e);
       toast.error(friendly.title, {
@@ -197,11 +209,64 @@ export function ResultView({
   };
 
   const revealInFinder = () => {
-    if (!job.outputPath) return;
-    invoke("open_in_finder", { path: job.outputPath }).catch((e) => {
+    const path = activeTextView === "translation" ? translation?.outputPath : job.outputPath;
+    if (!path) return;
+    invoke("open_in_finder", { path }).catch((e) => {
       const friendly = userErrorFrom(e);
       toast.error(friendly.title, { description: formatErrorDescription(e) });
     });
+  };
+
+  const startTranslation = async () => {
+    if (!job.text || !job.outputPath || modelBusy) return;
+    try {
+      if (!summarizerEnabled) {
+        const enabled = await updateSettings({
+          summarizer_enabled: true,
+          summarizer_promo_seen: true,
+        });
+        if (!enabled) return;
+      }
+      const status = await invoke<SummarizerStatus>("get_summarizer_status");
+      if (!status.available) {
+        toast.info("Нужно подготовить локальную модель", {
+          description: "Откройте раздел «Локальная модель» в настройках.",
+        });
+        onOpenSettings("summary");
+        return;
+      }
+      if (!status.modelReady) {
+        setPendingAutoDownload(true);
+        toast.info("Сначала скачаю локальную модель", {
+          description: "После загрузки нажмите «Перевести на русский» ещё раз.",
+        });
+        window.setTimeout(() => {
+          document.querySelector(".summary-card")?.scrollIntoView({ behavior: "smooth" });
+        }, 0);
+        return;
+      }
+      await invoke("translate_to_russian", {
+        id: job.id,
+        transcript: job.text,
+        transcriptPath: job.outputPath,
+      });
+      setActiveTextView("translation");
+    } catch (e) {
+      const friendly = userErrorFrom(e);
+      toast.error(friendly.title, { description: formatErrorDescription(e) });
+    }
+  };
+
+  const cancelTranslation = () => {
+    void invoke<boolean>("cancel_translation", { id: job.id })
+      .then((canceled) => {
+        if (!canceled) {
+          toast.info("Перевод уже сохраняется");
+        }
+      })
+      .catch((e) => {
+        console.error("cancel_translation failed:", e);
+      });
   };
 
   const improveQuality = async () => {
@@ -220,7 +285,7 @@ export function ResultView({
           description:
             "Откройте настройки, скачайте режим «Лучше для русского» и запустите улучшение ещё раз.",
         });
-        onOpenSettings();
+        onOpenSettings("models");
         return;
       }
 
@@ -247,8 +312,8 @@ export function ResultView({
     }
   };
 
-  const wordCount = countWords((job.text ?? "").trim());
-  const charCount = (job.text ?? "").length;
+  const wordCount = countWords(visibleText.trim());
+  const charCount = visibleText.length;
   const engine = job.engine ? readableEngineName(job.engine) : (engineLabel ?? ENGINE_LABEL.parakeet);
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -285,10 +350,19 @@ export function ResultView({
         <Button
           type="button"
           variant="outline"
+          onClick={startTranslation}
+          disabled={modelBusy}
+        >
+          <LanguagesIcon data-icon="inline-start" />
+          {translation ? "Обновить перевод" : "Перевести на русский"}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
           className="btn-accent"
           onClick={() => {
             if (!summarizerEnabled) {
-              void enableSummarizerAndDownload();
+              void enableLocalModelAndDownload();
             } else {
               const card = document.querySelector(".summary-card");
               card?.scrollIntoView({
@@ -302,7 +376,7 @@ export function ResultView({
               );
             }
           }}
-          disabled={promoBusy}
+          disabled={promoBusy || job.translation?.status === "generating"}
         >
           <SparklesIcon data-icon="inline-start" />
           Сделать конспект
@@ -341,6 +415,29 @@ export function ResultView({
               </div>
             </div>
           </div>
+
+          {translation && (
+            <div className="transcript-tabs" role="tablist" aria-label="Текст записи">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTextView === "original"}
+                onClick={() => setActiveTextView("original")}
+              >
+                Оригинал
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTextView === "translation"}
+                onClick={() => setActiveTextView("translation")}
+              >
+                Перевод
+              </button>
+            </div>
+          )}
+
+          <TranslationStatus state={job.translation} onCancel={cancelTranslation} />
 
           <div
             className={`segments ${

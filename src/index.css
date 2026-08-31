@@ -2467,6 +2467,76 @@ body {
   }
 }
 
+.transcript-tabs {
+  align-self: flex-start;
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.transcript-tabs button {
+  min-width: 96px;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-3);
+  font: 600 var(--fs-sm)/1 var(--font-sans);
+  cursor: pointer;
+  transition: background var(--duration-quick) var(--ease-out), color var(--duration-quick) var(--ease-out), box-shadow var(--duration-quick) var(--ease-out);
+}
+.transcript-tabs button:hover {
+  color: var(--ink);
+}
+.transcript-tabs button[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-elev);
+}
+.transcript-tabs button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--parrot-accent) 55%, transparent);
+  outline-offset: 2px;
+}
+.translation-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.translation-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink-2);
+  font: 500 var(--fs-sm)/var(--lh-sm) var(--font-sans);
+}
+.translation-error {
+  margin-bottom: 12px;
+}
+
+@media (max-width: 640px) {
+  .transcript-tabs {
+    align-self: stretch;
+  }
+  .transcript-tabs button {
+    min-width: 0;
+    flex: 1;
+  }
+  .translation-progress-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 /* Второе по значимости действие («Сделать конспект») — фирменный коралловый акцент.
    Вне @layer, чтобы перебить утилиты Tailwind на кнопке. */
 .result-action-bar .btn-accent {

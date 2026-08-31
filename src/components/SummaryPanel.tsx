@@ -10,6 +10,7 @@ import {
   listenInTauri,
 } from "@/lib/runtime";
 import { formatErrorDescription, isCancelledError, userErrorFrom } from "@/lib/userErrors";
+import { summaryResult } from "@/lib/jobArtifacts";
 import {
   DEFAULT_SUMMARY_MODEL,
   SUMMARY_MODEL_SIZE,
@@ -142,13 +143,14 @@ const stageLabel = (stage?: string) => {
 };
 
 export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
-  const status = job.summaryStatus ?? "idle";
-  const percent = job.summaryPercent ?? 0;
+  const status = job.summary?.status ?? "idle";
+  const percent = job.summary?.status === "generating" ? job.summary.percent : 0;
+  const summary = summaryResult(job.summary);
   const summaryModel = settings.summary_model ?? DEFAULT_SUMMARY_MODEL;
   const summaryModelSize = SUMMARY_MODEL_SIZE[summaryModel];
   const rendered = useMemo(
-    () => (job.summary ? renderMarkdown(job.summary) : null),
-    [job.summary],
+    () => (summary ? renderMarkdown(summary.content) : null),
+    [summary],
   );
 
   const [summarizerStatus, setSummarizerStatus] =
@@ -254,16 +256,19 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
   const cancelSummary = async () => {
     if (!isTauriRuntime()) return;
     try {
-      await invoke("cancel_summary", { id: job.id });
+      const canceled = await invoke<boolean>("cancel_summary", { id: job.id });
+      if (!canceled) {
+        toast.info("Конспект уже сохраняется");
+      }
     } catch (e) {
       console.error("cancel_summary failed:", e);
     }
   };
 
   const copySummary = async () => {
-    if (!job.summary) return;
+    if (!summary) return;
     try {
-      await navigator.clipboard.writeText(job.summary);
+      await navigator.clipboard.writeText(summary.content);
       toast.success("Конспект скопирован");
     } catch (e) {
       const friendly = userErrorFrom(e);
@@ -272,8 +277,8 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
   };
 
   const openInFinder = () => {
-    if (!job.summaryPath) return;
-    invoke("open_in_finder", { path: job.summaryPath }).catch((e) => {
+    if (!summary) return;
+    invoke("open_in_finder", { path: summary.outputPath }).catch((e) => {
       const friendly = userErrorFrom(e);
       toast.error(friendly.title, { description: formatErrorDescription(e) });
     });
@@ -303,7 +308,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
               >
                 ⧉ Копировать
               </Button>
-              {job.summaryPath && (
+              {summary && (
                 <Button
                   type="button"
                   variant="outline"
@@ -318,6 +323,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
                 variant="ghost"
                 size="sm"
                 onClick={startSummary}
+                disabled={job.translation?.status === "generating"}
                 title="Перегенерировать"
                 aria-label="Перегенерировать конспект"
               >
@@ -350,8 +356,8 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
       {available && !modelReady && !modelInstalling && (
         <div className="summary-promo summary-state-motion">
           <p className="summary-promo-text">
-            Соберите краткий конспект встречи: резюме, темы, тезисы и список
-            действий. Нужно один раз скачать локальную модель ({summaryModelSize}).
+            Локальная модель создаёт конспекты и переводит расшифровки на русский.
+            Нужно один раз скачать модель ({summaryModelSize}).
           </p>
           <Button type="button" onClick={installModel}>
             ⬇︎ Скачать модель ({summaryModelSize})
@@ -401,7 +407,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
           <Button
             type="button"
             onClick={startSummary}
-            disabled={!job.text || !job.outputPath}
+            disabled={!job.text || !job.outputPath || job.translation?.status === "generating"}
           >
             🪶 Сгенерировать конспект
           </Button>
@@ -412,7 +418,7 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
         <div className="summary-progress summary-state-motion">
           <Progress value={Math.max(percent, 2)} />
           <div className="summary-progress-text">
-            {stageLabel(job.summaryStage)} {percent}%
+            {stageLabel(job.summary?.status === "generating" ? job.summary.stage : undefined)} {percent}%
           </div>
         </div>
       )}
@@ -422,10 +428,15 @@ export function SummaryPanel({ job, settings, autoStartDownload }: Props) {
           <Alert variant="destructive">
           <AlertTitle>Не удалось создать конспект</AlertTitle>
           <AlertDescription className="whitespace-pre-wrap break-words">
-              {formatErrorDescription(job.summaryError)}
+              {formatErrorDescription(job.summary?.status === "error" ? job.summary.message : undefined)}
           </AlertDescription>
         </Alert>
-          <Button type="button" variant="outline" onClick={startSummary}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={startSummary}
+            disabled={job.translation?.status === "generating"}
+          >
             Попробовать ещё раз
           </Button>
         </div>

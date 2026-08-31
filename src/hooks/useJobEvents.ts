@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { cleanupTauriListeners, isTauriRuntime, listenInTauri } from "@/lib/runtime";
-import type { Job, JobStage, SummaryStage } from "../types";
+import type { Job, JobStage, SummaryStage, TranslationStage } from "../types";
+import { translationResult } from "../lib/jobArtifacts";
 
 interface JobQueued {
   id: string;
@@ -30,8 +31,19 @@ interface SummaryProgress { id: string; percent: number; stage: SummaryStage; }
 interface SummaryDone { id: string; markdown: string; outputPath: string; }
 interface SummaryError { id: string; message: string; }
 interface SummaryCanceled { id: string; }
+interface TranslationProgress {
+  id: string;
+  percent: number;
+  stage: TranslationStage;
+  currentPart: number;
+  totalParts: number;
+}
+interface TranslationDone { id: string; text: string; outputPath: string; }
+interface TranslationError { id: string; message: string; }
+interface TranslationCanceled { id: string; }
 
 export type JobAction =
+  | { type: "historyLoaded"; payload: Job }
   | { type: "jobQueued"; payload: JobQueued }
   | { type: "jobProgress"; payload: JobProgress }
   | { type: "jobDone"; payload: JobDone }
@@ -42,10 +54,27 @@ export type JobAction =
   | { type: "summaryProgress"; payload: SummaryProgress }
   | { type: "summaryDone"; payload: SummaryDone }
   | { type: "summaryError"; payload: SummaryError }
-  | { type: "summaryCanceled"; payload: SummaryCanceled };
+  | { type: "summaryCanceled"; payload: SummaryCanceled }
+  | { type: "translationProgress"; payload: TranslationProgress }
+  | { type: "translationDone"; payload: TranslationDone }
+  | { type: "translationError"; payload: TranslationError }
+  | { type: "translationCanceled"; payload: TranslationCanceled };
 
 export function jobsReducer(jobs: Job[], action: JobAction): Job[] {
   switch (action.type) {
+    case "historyLoaded": {
+      const existing = jobs.find((job) => job.id === action.payload.id);
+      const loaded = {
+        ...action.payload,
+        origin: existing?.origin ?? "history",
+      } satisfies Job;
+      return [
+        loaded,
+        ...jobs.filter(
+          (job) => job.id !== loaded.id && job.origin !== "history",
+        ),
+      ];
+    }
     case "jobQueued": {
       const existing = jobs.find((j) => j.id === action.payload.id);
       if (existing) return jobs;
@@ -57,6 +86,7 @@ export function jobsReducer(jobs: Job[], action: JobAction): Job[] {
           sourceKind: action.payload.sourceKind,
           engine: action.payload.engine,
           language: action.payload.language,
+          origin: "session",
           status: "queued",
           stage: null,
           percent: 0,
@@ -119,36 +149,80 @@ export function jobsReducer(jobs: Job[], action: JobAction): Job[] {
     case "summaryProgress":
       return updateJob(jobs, action.payload.id, (job) => ({
         ...job,
-        summaryStatus: "generating",
-        summaryPercent: action.payload.percent,
-        summaryStage: action.payload.stage,
-        summaryError: undefined,
+        summary: {
+          status: "generating",
+          percent: clampedPercent(action.payload.percent),
+          stage: action.payload.stage,
+        },
       }));
     case "summaryDone":
       return updateJob(jobs, action.payload.id, (job) => ({
         ...job,
-        summaryStatus: "done",
-        summaryPercent: 100,
-        summary: action.payload.markdown,
-        summaryPath: action.payload.outputPath,
-        summaryError: undefined,
+        summary: {
+          status: "done",
+          result: {
+            content: action.payload.markdown,
+            outputPath: action.payload.outputPath,
+          },
+        },
       }));
     case "summaryError":
       return updateJob(jobs, action.payload.id, (job) => ({
         ...job,
-        summaryStatus: "error",
-        summaryError: action.payload.message,
-        summaryStage: undefined,
+        summary: { status: "error", message: action.payload.message },
       }));
     case "summaryCanceled":
       return updateJob(jobs, action.payload.id, (job) => ({
         ...job,
-        summaryStatus: "idle",
-        summaryStage: undefined,
-        summaryPercent: 0,
-        summaryError: undefined,
+        summary: { status: "idle" },
       }));
+    case "translationProgress":
+      return updateJob(jobs, action.payload.id, (job) => ({
+        ...job,
+        translation: {
+          status: "generating",
+          stage: action.payload.stage,
+          percent: clampedPercent(action.payload.percent),
+          currentPart: action.payload.currentPart,
+          totalParts: action.payload.totalParts,
+          previous: translationResult(job.translation),
+        },
+      }));
+    case "translationDone":
+      return updateJob(jobs, action.payload.id, (job) => ({
+        ...job,
+        translation: {
+          status: "done",
+          result: {
+            content: action.payload.text,
+            outputPath: action.payload.outputPath,
+          },
+        },
+      }));
+    case "translationError":
+      return updateJob(jobs, action.payload.id, (job) => ({
+        ...job,
+        translation: {
+          status: "error",
+          message: action.payload.message,
+          previous: translationResult(job.translation),
+        },
+      }));
+    case "translationCanceled":
+      return updateJob(jobs, action.payload.id, (job) => {
+        const previous = translationResult(job.translation);
+        return {
+          ...job,
+          translation: previous
+            ? { status: "done", result: previous }
+            : { status: "idle" },
+        };
+      });
   }
+}
+
+export function jobsForQueue(jobs: Job[]): Job[] {
+  return jobs.filter((job) => job.origin !== "history");
 }
 
 function clampedPercent(percent: number): number {
@@ -206,6 +280,19 @@ export function useJobEvents(
       }),
       listenInTauri<SummaryCanceled>("summary:canceled", (e) => {
         dispatch({ type: "summaryCanceled", payload: e.payload });
+      }),
+      listenInTauri<TranslationProgress>("translation:progress", (e) => {
+        dispatch({ type: "translationProgress", payload: e.payload });
+      }),
+      listenInTauri<TranslationDone>("translation:done", (e) => {
+        dispatch({ type: "translationDone", payload: e.payload });
+      }),
+      listenInTauri<TranslationError>("translation:error", (e) => {
+        dispatch({ type: "translationError", payload: e.payload });
+        onError?.(e.payload.id, e.payload.message);
+      }),
+      listenInTauri<TranslationCanceled>("translation:canceled", (e) => {
+        dispatch({ type: "translationCanceled", payload: e.payload });
       }),
     ];
 

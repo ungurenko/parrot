@@ -42,7 +42,14 @@ pub(crate) fn get_summarizer_status(app: AppHandle) -> summarizer_qwen3::Summari
 }
 
 #[tauri::command]
-pub(crate) async fn setup_summarizer_env(app: AppHandle) -> Result<(), String> {
+pub(crate) async fn setup_summarizer_env(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let _local_task = state
+        .local_llm_tasks
+        .try_start("model:setup")
+        .ok_or_else(local_model_busy_message)?;
     let app_for_task = app.clone();
     let app_for_log = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -60,6 +67,10 @@ pub(crate) async fn download_summarizer_model(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let local_tasks = state.local_llm_tasks.clone();
+    let local_task = local_tasks
+        .try_start("model:download")
+        .ok_or_else(local_model_busy_message)?;
     let task_id = "model:summary".to_string();
     let token = state
         .model_cancel
@@ -79,21 +90,33 @@ pub(crate) async fn download_summarizer_model(
         move || summarizer_qwen3::warmup_model(&app_for_task, token_for_task),
     )
     .await?;
-    summarizer_qwen3::preload_server(app.clone());
+    drop(local_task);
+    summarizer_qwen3::preload_server(app.clone(), local_tasks);
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) async fn delete_summarizer_model(app: AppHandle) -> Result<(), String> {
+pub(crate) async fn delete_summarizer_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let _local_task = state
+        .local_llm_tasks
+        .try_start("model:delete")
+        .ok_or_else(local_model_busy_message)?;
     tauri::async_runtime::spawn_blocking(move || summarizer_qwen3::delete_model(&app))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
 
+fn local_model_busy_message() -> String {
+    "Локальная модель занята. Дождитесь завершения текущей задачи.".to_string()
+}
+
 #[tauri::command]
 pub(crate) fn cancel_summary(id: String, state: State<'_, AppState>) -> bool {
-    state.summary_cancel.cancel(&id)
+    state.local_llm_tasks.cancel(&format!("summary:{id}"))
 }
 
 #[tauri::command]
@@ -114,11 +137,12 @@ pub(crate) async fn summarize(
     let transcript_path_buf =
         validate_saved_file_path(&app, &transcript_path, SavedFileKind::Transcript)?;
 
-    let token = state
-        .summary_cancel
-        .try_create(&id)
-        .ok_or_else(|| "Конспект для этой записи уже генерируется".to_string())?;
-    let _task_guard = CancelRegistryGuard::new(state.summary_cancel.clone(), id.clone());
+    let task_id = format!("summary:{id}");
+    let generation_lease = state
+        .local_llm_tasks
+        .try_start(&task_id)
+        .ok_or_else(|| "Локальная модель уже занята другой задачей".to_string())?;
+    let token = generation_lease.token();
 
     let id_for_task = id.clone();
     let id_for_progress = id.clone();
@@ -160,11 +184,18 @@ pub(crate) async fn summarize(
     let token_for_task = token.clone();
     let result =
         tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<(String, PathBuf)> {
-            let summary = summarizer_qwen3::generate_summary(
-                &app_for_task,
-                &transcript_owned,
-                token_for_task,
-            )?;
+            let summary = {
+                let mut generation_lease = generation_lease;
+                let summary = summarizer_qwen3::generate_summary(
+                    &app_for_task,
+                    &transcript_owned,
+                    token_for_task.clone(),
+                )?;
+                if token_for_task.is_cancelled() || !generation_lease.begin_commit() {
+                    anyhow::bail!("cancelled");
+                }
+                summary
+            };
             let output = writer::save_summary(&transcript_path_buf, &summary)?;
             Ok((summary, output))
         })

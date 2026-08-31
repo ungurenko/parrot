@@ -141,6 +141,27 @@ export function userErrorFrom(error: unknown): UserFacingError {
     };
   }
 
+  if (normalized.includes("локальная модель уже занята")) {
+    return {
+      title: "Локальная модель занята",
+      message: "Parrot уже создаёт конспект или перевод.",
+      action: "Дождитесь завершения текущей задачи и повторите действие.",
+      technical: raw || undefined,
+    };
+  }
+
+  if (
+    normalized.includes("модель перевода") ||
+    normalized.includes("достигла лимита ответа")
+  ) {
+    return {
+      title: "Перевод не создался",
+      message: "Parrot не смог завершить локальный перевод.",
+      action: "Подождите немного и попробуйте ещё раз. Если ошибка повторится, откройте логи в настройках.",
+      technical: raw || undefined,
+    };
+  }
+
   if (
     normalized.includes("файл не найден") ||
     normalized.includes("не найден") ||

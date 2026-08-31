@@ -2,8 +2,32 @@ type JobStatus = "queued" | "running" | "canceling" | "canceled" | "done" | "err
 
 export type JobStage = "preparing" | "extracting" | "downloading" | "transcribing" | null;
 
-type SummaryStatus = "idle" | "generating" | "done" | "error";
 export type SummaryStage = "loading" | "generating" | "finalizing";
+export type TranslationStage = "loading" | "translating" | "saving";
+
+export interface GeneratedArtifact {
+  content: string;
+  outputPath: string;
+}
+
+export type SummaryState =
+  | { status: "idle" }
+  | { status: "generating"; stage: SummaryStage; percent: number }
+  | { status: "done"; result: GeneratedArtifact }
+  | { status: "error"; message: string };
+
+export type TranslationState =
+  | { status: "idle" }
+  | {
+      status: "generating";
+      stage: TranslationStage;
+      percent: number;
+      currentPart: number;
+      totalParts: number;
+      previous?: GeneratedArtifact;
+    }
+  | { status: "done"; result: GeneratedArtifact }
+  | { status: "error"; message: string; previous?: GeneratedArtifact };
 
 export interface Job {
   id: string;
@@ -18,12 +42,9 @@ export interface Job {
   text?: string;
   outputPath?: string;
   error?: string;
-  summaryStatus?: SummaryStatus;
-  summaryStage?: SummaryStage;
-  summaryPercent?: number;
-  summary?: string;
-  summaryPath?: string;
-  summaryError?: string;
+  origin?: "session" | "history";
+  summary?: SummaryState;
+  translation?: TranslationState;
 }
 
 export type Engine = "parakeet" | "whisper" | "qwen-0.6b" | "qwen-1.7b";
@@ -140,6 +161,8 @@ export const ACTIVE_JOB_SWITCH_HINT =
   "Дождитесь окончания транскрибации, чтобы сменить модель.";
 export const ACTIVE_JOB_DELETE_HINT =
   "Дождитесь окончания транскрибации, чтобы удалить модель.";
+export const ACTIVE_LOCAL_MODEL_HINT =
+  "Дождитесь завершения конспекта или перевода.";
 
 export interface HistoryEntry {
   id: string;
@@ -151,10 +174,12 @@ export interface HistoryEntry {
   createdAt: string;
   outputPath: string;
   summaryPath?: string;
+  translationPath?: string;
 }
 
 export interface LoadedHistoryEntry {
   entry: HistoryEntry;
   text: string;
   summary?: string;
+  translation?: string;
 }

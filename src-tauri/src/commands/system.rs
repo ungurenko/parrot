@@ -6,7 +6,9 @@ use crate::{paths, validate_saved_file_path, SavedFileKind};
 
 #[tauri::command]
 pub(crate) fn open_in_finder(path: String, app: AppHandle) -> Result<(), String> {
-    let kind = if crate::saved_file_kind_matches(Path::new(&path), SavedFileKind::Transcript) {
+    let kind = if crate::saved_file_kind_matches(Path::new(&path), SavedFileKind::Translation) {
+        SavedFileKind::Translation
+    } else if crate::saved_file_kind_matches(Path::new(&path), SavedFileKind::Transcript) {
         SavedFileKind::Transcript
     } else {
         SavedFileKind::Summary

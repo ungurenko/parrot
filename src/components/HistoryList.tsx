@@ -75,11 +75,12 @@ function mediaIcon(sourceName: string) {
   return <FileAudioIcon size={20} aria-hidden="true" />;
 }
 
-type HistoryFilter = "all" | "summary" | "youtube" | "files";
+type HistoryFilter = "all" | "summary" | "translation" | "youtube" | "files";
 
 const FILTERS: Array<{ id: HistoryFilter; label: string }> = [
   { id: "all", label: "Все" },
   { id: "summary", label: "С конспектом" },
+  { id: "translation", label: "С переводом" },
   { id: "youtube", label: "YouTube" },
   { id: "files", label: "Файлы" },
 ];
@@ -100,7 +101,7 @@ export function HistoryList({
   const [filter, setFilter] = useState<HistoryFilter>("all");
   const [query, setQuery] = useState("");
   const showSearch = entries.length >= 8;
-  const showFilters = entries.length >= 6;
+  const showFilters = entries.length > 0;
 
   const filteredEntries = useMemo(() => {
     const normalizedQuery = showSearch ? query.trim().toLowerCase() : "";
@@ -112,6 +113,7 @@ export function HistoryList({
       const matchesFilter =
         activeFilter === "all" ||
         (activeFilter === "summary" && Boolean(entry.summaryPath)) ||
+        (activeFilter === "translation" && Boolean(entry.translationPath)) ||
         (activeFilter === "youtube" && entry.sourceKind === "youtube") ||
         (activeFilter === "files" && entry.sourceKind !== "youtube");
       return matchesQuery && matchesFilter;
@@ -214,6 +216,7 @@ export function HistoryList({
                   <span className="history-meta">
                     <span>{absoluteDate(entry.createdAt)}</span>
                     {entry.summaryPath && <span>конспект</span>}
+                    {entry.translationPath && <span>перевод</span>}
                   </span>
                 </button>
                 <button

@@ -10,6 +10,7 @@ pub(crate) mod jobs;
 pub(crate) mod models;
 pub(crate) mod summary;
 pub(crate) mod system;
+pub(crate) mod translation;
 
 pub(crate) fn spawn_model_progress_poller(
     app: AppHandle,

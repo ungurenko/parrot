@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, BufReader, ErrorKind, Write};
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use std::os::fd::AsRawFd;
 
 use crate::cancellation::CancelToken;
 use crate::prompts;
-use crate::{mlx_env, paths, settings, summarizer_models};
+use crate::{local_llm, mlx_env, paths, settings, summarizer_models};
 use summarizer_models::SummaryModelSpec;
 
 const SERVER_LOCK_FILE: &str = "summary-server.lock";
@@ -32,16 +32,24 @@ const LEGACY_QWEN_READY_MARKER: &str = ".parrot-ready-summary";
 const SUMMARY_MAX_TOKENS: u32 = 4096;
 const SUMMARY_TEMP: f32 = 0.3;
 const SUMMARY_TOP_P: f32 = 0.9;
+const TRANSLATION_TEMP: f32 = 0.1;
+const TRANSLATION_TOP_P: f32 = 0.9;
 const SUMMARY_RUNTIME: &str = "mlx_lm";
 const SUMMARY_MLX_PACKAGES: [&str; 2] = [mlx_env::SHARED_MLX_PACKAGE, "mlx-lm==0.31.3"];
 
 static SUMMARY_SERVER: Lazy<Mutex<Option<SummaryServer>>> = Lazy::new(|| Mutex::new(None));
 static RESOLVED_SUMMARY_PYTHON: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
-static SERVER_CLIENT: Lazy<Result<reqwest::blocking::Client, reqwest::Error>> = Lazy::new(|| {
-    reqwest::blocking::Client::builder()
-        .timeout(mlx_env::SERVER_REQUEST_TIMEOUT)
-        .build()
-});
+const SUMMARY_OPTIONS: local_llm::GenerationOptions = local_llm::GenerationOptions {
+    max_tokens: SUMMARY_MAX_TOKENS,
+    temperature: SUMMARY_TEMP,
+    top_p: SUMMARY_TOP_P,
+};
+
+const TRANSLATION_OPTIONS: local_llm::GenerationOptions = local_llm::GenerationOptions {
+    max_tokens: SUMMARY_MAX_TOKENS,
+    temperature: TRANSLATION_TEMP,
+    top_p: TRANSLATION_TOP_P,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct SummaryServerRecord {
@@ -249,8 +257,13 @@ pub fn generate_summary(
     let started = Instant::now();
     let spec = selected_model(app);
 
-    let text = match generate_summary_with_server(app, system_prompt, &user_prompt, cancel.clone())
-    {
+    let text = match generate_summary_with_server(
+        app,
+        system_prompt,
+        &user_prompt,
+        SUMMARY_OPTIONS,
+        cancel.clone(),
+    ) {
         Ok(text) => {
             tracing::info!(
                 "summary warm server generation finished in {:.2}s for {} chars",
@@ -295,15 +308,42 @@ pub fn generate_summary(
     Ok(text)
 }
 
+pub fn generate_translation_chunk(
+    app: &AppHandle,
+    text: &str,
+    part: usize,
+    total: usize,
+    cancel: Arc<CancelToken>,
+) -> Result<String> {
+    let system_prompt = prompts::TRANSLATION_SYSTEM_PROMPT;
+    let user_prompt = prompts::build_translation_user_prompt(text, part, total);
+    // Translation must use the streaming path because it reports when the
+    // model hits its output limit. The CLI fallback cannot expose that signal
+    // and could make a truncated translation look successful.
+    let output = generate_summary_with_server(
+        app,
+        system_prompt,
+        &user_prompt,
+        TRANSLATION_OPTIONS,
+        cancel,
+    )
+    .context("Модель перевода завершилась с ошибкой")?;
+    if output.trim().is_empty() {
+        return Err(anyhow!("Модель перевода вернула пустой ответ"));
+    }
+    Ok(output)
+}
+
 fn generate_summary_with_server(
     app: &AppHandle,
     system_prompt: &str,
     user_prompt: &str,
+    options: local_llm::GenerationOptions,
     cancel: Arc<CancelToken>,
 ) -> Result<String> {
     let (url, pid, reused_server) = ensure_summary_server(app, cancel.clone())?;
     let request_started = Instant::now();
-    let text = match post_to_summary_server(&url, pid, system_prompt, user_prompt, cancel) {
+    let text = match local_llm::generate(&url, pid, system_prompt, user_prompt, options, cancel) {
         Ok(text) => text,
         Err(error) => {
             // A failed request can mean that the Python server is wedged. Do
@@ -458,15 +498,26 @@ fn retire_summary_server(pid: u32) {
     }
 }
 
-pub fn preload_server(app: AppHandle) {
+pub fn preload_server(app: AppHandle, local_tasks: crate::local_llm_tasks::LocalLlmTasks) {
     tauri::async_runtime::spawn_blocking(move || {
+        let Some(local_task) = local_tasks.try_start("model:preload") else {
+            tracing::info!("summary warm server preload skipped: local model is busy");
+            return;
+        };
+        let cancel = local_task.token();
         if !is_ready(&app) {
             return;
         }
-        let cancel = CancelToken::new();
-        match ensure_summary_server(&app, cancel) {
-            Ok((url, _, reused)) => {
-                if let Err(e) = warm_summary_server(&url) {
+        match ensure_summary_server(&app, cancel.clone()) {
+            Ok((url, pid, reused)) => {
+                cancel.register_pid(pid);
+                let warmup_result = local_llm::warmup(&url, SUMMARY_OPTIONS);
+                cancel.unregister_pid(pid);
+                if cancel.is_cancelled() {
+                    stop_server();
+                    return;
+                }
+                if let Err(e) = warmup_result {
                     tracing::warn!("summary warm server preload request failed: {e:#}");
                     stop_server();
                     return;
@@ -478,168 +529,6 @@ pub fn preload_server(app: AppHandle) {
             }
         }
     });
-}
-
-fn post_to_summary_server(
-    url: &str,
-    server_pid: u32,
-    system_prompt: &str,
-    user_prompt: &str,
-    cancel: Arc<CancelToken>,
-) -> Result<String> {
-    if cancel.is_cancelled() {
-        anyhow::bail!("cancelled");
-    }
-
-    cancel.register_pid(server_pid);
-    let result = post_to_summary_server_inner(url, system_prompt, user_prompt, cancel.clone());
-    cancel.unregister_pid(server_pid);
-    result
-}
-
-fn warm_summary_server(url: &str) -> Result<()> {
-    let client = server_client()?;
-    let response = client
-        .post(format!("{url}/v1/chat/completions"))
-        .json(&SummaryServerRequest {
-            messages: vec![SummaryChatMessage {
-                role: "user",
-                content: "Привет",
-            }],
-            max_tokens: 4,
-            temperature: SUMMARY_TEMP,
-            top_p: SUMMARY_TOP_P,
-            stream: false,
-        })
-        .send()
-        .context("Не удалось прогреть сервер модели конспекта")?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().unwrap_or_default();
-        return Err(anyhow!(
-            "Сервер модели конспекта на warmup вернул {status}: {body}"
-        ));
-    }
-    let _ = response.bytes()?;
-    Ok(())
-}
-
-fn post_to_summary_server_inner(
-    url: &str,
-    system_prompt: &str,
-    user_prompt: &str,
-    cancel: Arc<CancelToken>,
-) -> Result<String> {
-    let client = server_client()?;
-    let response = client
-        .post(format!("{url}/v1/chat/completions"))
-        .json(&SummaryServerRequest {
-            messages: vec![
-                SummaryChatMessage {
-                    role: "system",
-                    content: system_prompt,
-                },
-                SummaryChatMessage {
-                    role: "user",
-                    content: user_prompt,
-                },
-            ],
-            max_tokens: SUMMARY_MAX_TOKENS,
-            temperature: SUMMARY_TEMP,
-            top_p: SUMMARY_TOP_P,
-            stream: true,
-        })
-        .send()
-        .context("Не удалось отправить запрос в mlx-lm server")?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().unwrap_or_default();
-        return Err(anyhow!("Сервер модели конспекта вернул {status}: {body}"));
-    }
-
-    read_summary_stream(response, cancel)
-}
-
-#[derive(Serialize)]
-struct SummaryServerRequest<'a> {
-    messages: Vec<SummaryChatMessage<'a>>,
-    max_tokens: u32,
-    temperature: f32,
-    top_p: f32,
-    stream: bool,
-}
-
-#[derive(Serialize)]
-struct SummaryChatMessage<'a> {
-    role: &'a str,
-    content: &'a str,
-}
-
-#[derive(Deserialize)]
-struct SummaryStreamChunk {
-    choices: Vec<SummaryStreamChoice>,
-}
-
-#[derive(Deserialize)]
-struct SummaryStreamChoice {
-    delta: Option<SummaryStreamDelta>,
-}
-
-#[derive(Deserialize)]
-struct SummaryStreamDelta {
-    content: Option<String>,
-}
-
-fn read_summary_stream(
-    response: reqwest::blocking::Response,
-    cancel: Arc<CancelToken>,
-) -> Result<String> {
-    let mut reader = BufReader::new(response);
-    let mut line = String::new();
-    let mut output = String::new();
-
-    loop {
-        if cancel.is_cancelled() {
-            anyhow::bail!("cancelled");
-        }
-
-        line.clear();
-        let read = reader.read_line(&mut line)?;
-        if read == 0 {
-            break;
-        }
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with(':') {
-            continue;
-        }
-        let Some(data) = trimmed.strip_prefix("data:") else {
-            continue;
-        };
-        if append_summary_stream_event(data.trim(), &mut output)? {
-            break;
-        }
-    }
-
-    Ok(output.trim().to_string())
-}
-
-fn append_summary_stream_event(data: &str, output: &mut String) -> Result<bool> {
-    if data == "[DONE]" {
-        return Ok(true);
-    }
-    let chunk: SummaryStreamChunk =
-        serde_json::from_str(data).context("mlx-lm server вернул невалидный streaming JSON")?;
-    for choice in chunk.choices {
-        if let Some(delta) = choice.delta {
-            if let Some(content) = delta.content {
-                output.push_str(&content);
-            }
-        }
-    }
-    Ok(false)
 }
 
 struct MlxLmGenerateRequest<'a> {
@@ -794,12 +683,6 @@ fn wait_for_server(child: &mut Child, port: u16, cancel: &CancelToken) -> Result
         std::thread::sleep(Duration::from_millis(500));
     }
     Err(anyhow!("mlx-lm server не успел запуститься"))
-}
-
-fn server_client() -> Result<&'static reqwest::blocking::Client> {
-    SERVER_CLIENT
-        .as_ref()
-        .map_err(|e| anyhow!("Не удалось создать HTTP-клиент mlx-lm server: {e}"))
 }
 
 fn find_free_port() -> Result<u16> {
@@ -1521,29 +1404,6 @@ mod tests {
         ));
 
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn summary_stream_events_append_content_until_done() {
-        let mut output = String::new();
-
-        let done = append_summary_stream_event(
-            r###"{"choices":[{"delta":{"content":"## Резюме\n"}}]}"###,
-            &mut output,
-        )
-        .expect("append first chunk");
-        assert!(!done);
-
-        let done = append_summary_stream_event(
-            r#"{"choices":[{"delta":{"content":"Готово"}}]}"#,
-            &mut output,
-        )
-        .expect("append second chunk");
-        assert!(!done);
-
-        let done = append_summary_stream_event("[DONE]", &mut output).expect("done chunk");
-        assert!(done);
-        assert_eq!(output, "## Резюме\nГотово");
     }
 
     #[test]
