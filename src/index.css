@@ -2298,12 +2298,16 @@ body {
   }
   .history-filters {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: var(--s-1);
   }
   .history-filters button {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
     height: 28px;
-    padding: 0 10px;
+    padding: 0 12px;
     border-radius: var(--r-pill);
     border: 1px solid var(--hairline);
     background: var(--surface-nav);
@@ -2315,7 +2319,7 @@ body {
   .history-filters button[aria-pressed="true"] {
     background: var(--ink);
     border-color: var(--ink);
-    color: white;
+    color: var(--surface);
   }
   .history-group {
     display: flex;
