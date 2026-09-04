@@ -6,6 +6,11 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import {
+  matchesHistoryFilter,
+  visibleHistoryFilters,
+  type HistoryFilter,
+} from "../lib/historyFilters";
 import type { HistoryEntry } from "../types";
 
 interface Props {
@@ -75,16 +80,6 @@ function mediaIcon(sourceName: string) {
   return <FileAudioIcon size={20} aria-hidden="true" />;
 }
 
-type HistoryFilter = "all" | "summary" | "translation" | "youtube" | "files";
-
-const FILTERS: Array<{ id: HistoryFilter; label: string }> = [
-  { id: "all", label: "Все" },
-  { id: "summary", label: "С конспектом" },
-  { id: "translation", label: "С переводом" },
-  { id: "youtube", label: "YouTube" },
-  { id: "files", label: "Файлы" },
-];
-
 export function HistoryList({
   entries,
   onOpen,
@@ -101,24 +96,26 @@ export function HistoryList({
   const [filter, setFilter] = useState<HistoryFilter>("all");
   const [query, setQuery] = useState("");
   const showSearch = entries.length >= 8;
-  const showFilters = entries.length > 0;
+  const availableFilters = useMemo(
+    () => visibleHistoryFilters(entries),
+    [entries],
+  );
+  const showFilters = availableFilters.length > 1;
+  // The selected filter can go empty (its last entry was deleted) and drop out
+  // of the offered pills — fall back to "all" instead of showing a blank list.
+  const activeFilter = availableFilters.some((option) => option.id === filter)
+    ? filter
+    : "all";
 
   const filteredEntries = useMemo(() => {
     const normalizedQuery = showSearch ? query.trim().toLowerCase() : "";
-    const activeFilter = showFilters ? filter : "all";
     return entries.filter((entry) => {
       const matchesQuery =
         !normalizedQuery ||
         entry.sourceName.toLowerCase().includes(normalizedQuery);
-      const matchesFilter =
-        activeFilter === "all" ||
-        (activeFilter === "summary" && Boolean(entry.summaryPath)) ||
-        (activeFilter === "translation" && Boolean(entry.translationPath)) ||
-        (activeFilter === "youtube" && entry.sourceKind === "youtube") ||
-        (activeFilter === "files" && entry.sourceKind !== "youtube");
-      return matchesQuery && matchesFilter;
+      return matchesQuery && matchesHistoryFilter(entry, activeFilter);
     });
-  }, [entries, filter, query, showFilters, showSearch]);
+  }, [activeFilter, entries, query, showSearch]);
 
   const groupedEntries = useMemo(() => {
     const groups: Array<{ label: string; entries: HistoryEntry[] }> = [];
@@ -175,11 +172,11 @@ export function HistoryList({
               role="group"
               aria-label="Фильтр истории"
             >
-              {FILTERS.map((item) => (
+              {availableFilters.map((item) => (
                 <button
                   key={item.id}
                   type="button"
-                  aria-pressed={filter === item.id}
+                  aria-pressed={activeFilter === item.id}
                   onClick={() => setFilter(item.id)}
                 >
                   {item.label}

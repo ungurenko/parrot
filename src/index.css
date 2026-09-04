@@ -2299,7 +2299,7 @@ body {
   .history-filters {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--s-1);
+    gap: var(--s-2);
   }
   .history-filters button {
     flex: 0 0 auto;
